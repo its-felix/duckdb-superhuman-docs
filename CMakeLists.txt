@@ -57,17 +57,19 @@ if(NOT RUST_EXTENSION_CARGO_TARGET STREQUAL "")
 endif()
 list(APPEND RUST_EXTENSION_CARGO_BUILD_ARGS --manifest-path
      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml")
-set(RUST_EXTENSION_LIB
-    "${RUST_EXTENSION_LIB_DIR}/${RUST_EXTENSION_LIB_NAME}")
-set(RUST_EXTENSION_CARGO_ENV
-    "CARGO_TARGET_DIR=${RUST_EXTENSION_TARGET_DIR}")
+set(RUST_EXTENSION_LIB "${RUST_EXTENSION_LIB_DIR}/${RUST_EXTENSION_LIB_NAME}")
+set(RUST_EXTENSION_CARGO_ENV "CARGO_TARGET_DIR=${RUST_EXTENSION_TARGET_DIR}")
+if(MSVC AND VCPKG_TARGET_TRIPLET MATCHES "-windows-static")
+  # extension-ci-tools selects a static Windows runtime through its vcpkg
+  # triplet. Build the Rust archive with the same runtime.
+  list(APPEND RUST_EXTENSION_CARGO_ENV
+       "RUSTFLAGS=-C target-feature=+crt-static")
+endif()
 if(RUST_EXTENSION_DUCKDB_PLATFORM STREQUAL "wasm_threads")
   # Rust's distributed Emscripten std is single-threaded. Rebuild it with the
   # same Wasm atomics features as DuckDB's threaded bundle.
-  list(APPEND RUST_EXTENSION_CARGO_BUILD_ARGS
-       -Z build-std=std,panic_abort)
-  list(APPEND RUST_EXTENSION_CARGO_ENV
-       "RUSTC_BOOTSTRAP=1"
+  list(APPEND RUST_EXTENSION_CARGO_BUILD_ARGS -Z build-std=std,panic_abort)
+  list(APPEND RUST_EXTENSION_CARGO_ENV "RUSTC_BOOTSTRAP=1"
        "RUSTFLAGS=-C target-feature=+atomics,+bulk-memory,+mutable-globals")
 endif()
 file(GLOB_RECURSE RUST_EXTENSION_SOURCES CONFIGURE_DEPENDS
@@ -110,8 +112,9 @@ endif()
 
 add_dependencies(${EXTENSION_NAME} rust_extension_build)
 target_compile_definitions(
-  ${EXTENSION_NAME} PRIVATE RUST_BRIDGE_EXTENSION_ENTRY=${TARGET_NAME}
-                            RUST_BRIDGE_EXTENSION_CLASS=${RUST_BRIDGE_EXTENSION_CLASS})
+  ${EXTENSION_NAME}
+  PRIVATE RUST_BRIDGE_EXTENSION_ENTRY=${TARGET_NAME}
+          RUST_BRIDGE_EXTENSION_CLASS=${RUST_BRIDGE_EXTENSION_CLASS})
 if(NOT SUPERHUMAN_DOCS_BUILTIN_ONLY)
   add_dependencies(${TARGET_NAME}_loadable_extension rust_extension_build)
   target_compile_definitions(
@@ -124,13 +127,20 @@ set(RUST_EXTENSION_SYSTEM_LIBS "")
 if(APPLE OR RUST_EXTENSION_DUCKDB_PLATFORM MATCHES "^osx_")
   find_library(RUST_EXTENSION_SECURITY_FRAMEWORK Security REQUIRED)
   find_library(RUST_EXTENSION_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-  list(APPEND RUST_EXTENSION_SYSTEM_LIBS
-       "${RUST_EXTENSION_SECURITY_FRAMEWORK}"
+  list(APPEND RUST_EXTENSION_SYSTEM_LIBS "${RUST_EXTENSION_SECURITY_FRAMEWORK}"
        "${RUST_EXTENSION_CORE_FOUNDATION_FRAMEWORK}")
 endif()
 if(WIN32 OR RUST_EXTENSION_DUCKDB_PLATFORM MATCHES "^windows_")
-  list(APPEND RUST_EXTENSION_SYSTEM_LIBS ntdll userenv ws2_32 bcrypt advapi32
-       crypt32 secur32)
+  list(
+    APPEND
+    RUST_EXTENSION_SYSTEM_LIBS
+    ntdll
+    userenv
+    ws2_32
+    bcrypt
+    advapi32
+    crypt32
+    secur32)
 endif()
 
 target_link_libraries(${EXTENSION_NAME} "${RUST_EXTENSION_LIB}"
@@ -147,9 +157,8 @@ if(RUST_EXTENSION_DUCKDB_PLATFORM MATCHES "^wasm_")
   endif()
   foreach(RUST_EXTENSION_LINK_TARGET IN LISTS RUST_EXTENSION_LINK_TARGETS)
     target_link_options(
-      ${RUST_EXTENSION_LINK_TARGET}
-      PUBLIC "SHELL:-sFETCH=1" "SHELL:-sASYNCIFY=1"
-             "SHELL:-sASYNCIFY_STACK_SIZE=262144")
+      ${RUST_EXTENSION_LINK_TARGET} PUBLIC "SHELL:-sFETCH=1"
+      "SHELL:-sASYNCIFY=1" "SHELL:-sASYNCIFY_STACK_SIZE=262144")
   endforeach()
 endif()
 

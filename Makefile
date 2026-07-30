@@ -9,6 +9,10 @@ DEFAULT_TEST_EXTENSION_DEPS=
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 include extension-ci-tools/makefiles/vcpkg.Makefile
 
+.PHONY: wasm_pre_build_step
+wasm_pre_build_step:
+	rustup component add rust-src
+
 .PHONY: verify
 verify:
 	cargo test
