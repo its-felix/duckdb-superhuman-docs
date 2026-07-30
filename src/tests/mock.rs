@@ -255,8 +255,8 @@ fn duckdb_mock_superhuman_docs_wide_types() {
                 \"Hyperlink\".name, \"Hyperlink\".url, \
                 \"Lookup\".name, \"Lookup\".url, \"Lookup\".tableId, \"Lookup\".tableUrl, \"Lookup\".rowId, \
                 CAST(\"Other\" AS VARCHAR), CAST(\"MultiSelect\" AS VARCHAR), \
-                list_transform(\"Durations\", value -> epoch(value)), \
-                list_transform(\"Currencies\", value -> value.currency), CAST(\"Others\" AS VARCHAR) \
+                list_transform(\"Durations\", lambda value: epoch(value)), \
+                list_transform(\"Currencies\", lambda value: value.currency), CAST(\"Others\" AS VARCHAR) \
          FROM {table};
          INSERT INTO {table} (\"Number\", \"Percent\", \"Slider\", \"Progress\", \"Scale\", \"Currency\", \"Image\", \"Person\", \"Hyperlink\", \"Lookup\", \"MultiSelect\", \"Currencies\")
          VALUES (

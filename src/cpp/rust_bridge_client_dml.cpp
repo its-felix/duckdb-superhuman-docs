@@ -83,7 +83,11 @@ idx_t RustBridgeClient::UpdateRows(const RustBridgeTableInfo &table, DataChunk &
 				Value value;
 				if (expressions[expr_idx]->GetExpressionType() == ExpressionType::BOUND_REF) {
 					auto &binding = expressions[expr_idx]->Cast<BoundReferenceExpression>();
+#ifdef __EMSCRIPTEN__
 					value = chunk.GetValue(binding.index, row_idx);
+#else
+					value = chunk.GetValue(binding.Index(), row_idx);
+#endif
 				} else if (expressions[expr_idx]->GetExpressionType() == ExpressionType::VALUE_DEFAULT) {
 					value = Value(table.columns[col_idx].duckdb_type);
 				} else {

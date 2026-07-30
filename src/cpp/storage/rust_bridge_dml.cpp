@@ -49,7 +49,11 @@ SinkCombineResultType RustBridgeDML::Combine(ExecutionContext &, OperatorSinkCom
 SourceResultType RustBridgeDML::GetDataInternal(ExecutionContext &, DataChunk &chunk, OperatorSourceInput &) const {
 	auto &state = sink_state->Cast<RustBridgeDMLGlobalState>();
 	chunk.data[0].SetValue(0, Value::BIGINT(NumericCast<int64_t>(state.affected_count)));
+#ifdef __EMSCRIPTEN__
 	chunk.SetCardinality(1);
+#else
+	chunk.SetCardinalityUnsafe(1);
+#endif
 	return SourceResultType::FINISHED;
 }
 

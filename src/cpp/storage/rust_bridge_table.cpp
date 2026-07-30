@@ -9,11 +9,19 @@
 namespace duckdb {
 
 CreateTableInfo RustBridgeCreateTableInfo(const RustBridgeTableInfo &table, const string &schema_name) {
+#ifdef __EMSCRIPTEN__
 	CreateTableInfo info(INVALID_CATALOG, schema_name, RustBridgeString(table.Raw().name));
 	for (auto &column : table.columns) {
 		info.columns.AddColumn(ColumnDefinition(RustBridgeString(column.Raw().name), column.duckdb_type));
 	}
-	return info;
+#else
+	auto table_name = Identifier(RustBridgeString(table.Raw().name));
+	CreateTableInfo info(QualifiedName(Identifier::InvalidCatalog(), Identifier(schema_name), std::move(table_name)));
+	for (auto &column : table.columns) {
+		info.columns.AddColumn(ColumnDefinition(Identifier(RustBridgeString(column.Raw().name)), column.duckdb_type));
+	}
+#endif
+	return std::move(info);
 }
 
 RustBridgeTableCatalogEntry::RustBridgeTableCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema,

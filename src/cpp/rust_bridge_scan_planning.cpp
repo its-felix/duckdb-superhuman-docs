@@ -14,6 +14,7 @@ namespace duckdb {
 
 static bool TryExtractRustBridgeEqualityFilter(const LogicalGet &get, const RustBridgeTableInfo &table,
                                                const Expression &expr, string &query, string &description) {
+#ifdef __EMSCRIPTEN__
 	if (expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL ||
 	    expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 		return false;
@@ -22,6 +23,15 @@ static bool TryExtractRustBridgeEqualityFilter(const LogicalGet &get, const Rust
 	auto &comparison = expr.Cast<BoundComparisonExpression>();
 	auto left = comparison.left.get();
 	auto right = comparison.right.get();
+#else
+	if (expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL || !BoundComparisonExpression::IsComparison(expr)) {
+		return false;
+	}
+
+	auto &comparison = expr.Cast<BoundFunctionExpression>();
+	auto left = &BoundComparisonExpression::Left(comparison);
+	auto right = &BoundComparisonExpression::Right(comparison);
+#endif
 	if (left->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
 	    right->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 		std::swap(left, right);
@@ -32,14 +42,19 @@ static bool TryExtractRustBridgeEqualityFilter(const LogicalGet &get, const Rust
 	}
 
 	auto &column_ref = left->Cast<BoundColumnRefExpression>();
-	if (column_ref.binding.table_index != get.table_index) {
+#ifdef __EMSCRIPTEN__
+	auto &binding = column_ref.binding;
+#else
+	auto &binding = column_ref.Binding();
+#endif
+	if (binding.table_index != get.table_index) {
 		return false;
 	}
 	auto &column_ids = get.GetColumnIds();
-	if (column_ref.binding.column_index >= column_ids.size()) {
+	if (binding.column_index >= column_ids.size()) {
 		return false;
 	}
-	auto column_index = column_ids[column_ref.binding.column_index];
+	auto column_index = column_ids[binding.column_index];
 	if (column_index.IsVirtualColumn()) {
 		return false;
 	}
@@ -51,7 +66,11 @@ static bool TryExtractRustBridgeEqualityFilter(const LogicalGet &get, const Rust
 	if (!rust_ext_scan_can_filter_equality(column.Raw().handle)) {
 		return false;
 	}
+#ifdef __EMSCRIPTEN__
 	auto &constant = right->Cast<BoundConstantExpression>().value;
+#else
+	auto &constant = right->Cast<BoundConstantExpression>().GetValue();
+#endif
 	if (constant.IsNull()) {
 		return false;
 	}

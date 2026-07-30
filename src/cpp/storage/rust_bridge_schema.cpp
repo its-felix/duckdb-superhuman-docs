@@ -57,7 +57,11 @@ RustBridgeSchemaCatalogEntry::RustBridgeSchemaCatalogEntry(ClientContext &, Rust
     : SchemaCatalogEntry(catalog, info) {
 	for (idx_t table_idx = 0; table_idx < catalog_info.TableCount(); table_idx++) {
 		auto table = BorrowRustBridgeTableInfo(catalog_info.Raw().tables[table_idx]);
+#ifdef __EMSCRIPTEN__
 		auto create_info = RustBridgeCreateTableInfo(table, name);
+#else
+		auto create_info = RustBridgeCreateTableInfo(table, name.GetIdentifierName());
+#endif
 		auto entry = make_uniq<RustBridgeTableCatalogEntry>(catalog, *this, create_info, table);
 		entries[RustBridgeString(table.Raw().name)] = std::move(entry);
 	}
@@ -134,7 +138,11 @@ optional_ptr<CatalogEntry> RustBridgeSchemaCatalogEntry::CreateType(CatalogTrans
 }
 
 void RustBridgeSchemaCatalogEntry::DropEntry(ClientContext &, DropInfo &info) {
+#ifdef __EMSCRIPTEN__
 	throw DropEntryNotSupported(info.name);
+#else
+	throw DropEntryNotSupported(info.GetQualifiedName().Name().GetIdentifierName());
+#endif
 }
 
 void RustBridgeSchemaCatalogEntry::Alter(CatalogTransaction, AlterInfo &) {

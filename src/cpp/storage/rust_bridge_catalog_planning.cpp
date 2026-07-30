@@ -2,6 +2,7 @@
 
 #include "rust_bridge_extension.h"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
@@ -60,7 +61,11 @@ PhysicalOperator &RustBridgeCatalog::PlanDelete(ClientContext &context, Physical
 		throw NotImplementedException("%s", rust_ext_dml_not_supported_message(RUST_EXT_DML_DELETE));
 	}
 	auto &bound_ref = op.expressions[0]->Cast<BoundReferenceExpression>();
+#ifdef __EMSCRIPTEN__
 	auto &del = planner.Make<RustBridgeDelete>(op, op.table.Cast<RustBridgeTableCatalogEntry>(), bound_ref.index);
+#else
+	auto &del = planner.Make<RustBridgeDelete>(op, op.table.Cast<RustBridgeTableCatalogEntry>(), bound_ref.Index());
+#endif
 	del.children.push_back(plan);
 	return del;
 }

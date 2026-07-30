@@ -149,7 +149,11 @@ static void RustBridgeScan(ClientContext &, TableFunctionInput &input, DataChunk
 			break;
 		}
 	}
+#ifdef __EMSCRIPTEN__
 	output.SetCardinality(out_row);
+#else
+	output.SetCardinalityUnsafe(out_row);
+#endif
 }
 
 TableFunction RustBridgeScanFunction::GetFunction() {

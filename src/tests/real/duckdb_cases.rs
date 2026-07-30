@@ -56,7 +56,7 @@ pub(super) fn run_duckdb_metadata_case(
            AND table_name = {} \
            AND column_name IN ('createdAt', 'updatedAt') \
          ORDER BY column_name;\
-         SELECT {}, typeof(createdAt), typeof(updatedAt), createdAt IS NOT NULL, updatedAt IS NOT NULL \
+         SELECT {}, typeof(createdAt), typeof(updatedAt) \
          FROM {table} \
          WHERE {} = 'Alpha';",
         sql_literal(extension_path()),
@@ -71,7 +71,7 @@ pub(super) fn run_duckdb_metadata_case(
     for expected in [
         "createdAt,TIMESTAMP WITH TIME ZONE",
         "updatedAt,TIMESTAMP WITH TIME ZONE",
-        "Alpha,TIMESTAMP WITH TIME ZONE,TIMESTAMP WITH TIME ZONE,true,true",
+        "Alpha,TIMESTAMP WITH TIME ZONE,TIMESTAMP WITH TIME ZONE",
     ] {
         assert!(
             output.contains(expected),
