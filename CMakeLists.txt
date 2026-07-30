@@ -9,6 +9,10 @@ project(${TARGET_NAME})
 include_directories(src/include)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
+option(SUPERHUMAN_DOCS_BUILTIN_ONLY
+       "Build only the static extension target for embedding in DuckDB-Wasm"
+       OFF)
+
 set(RUST_EXTENSION_DUCKDB_PLATFORM "${DUCKDB_EXPLICIT_PLATFORM}")
 if(DEFINED ENV{DUCKDB_PLATFORM} AND NOT "$ENV{DUCKDB_PLATFORM}" STREQUAL "")
   set(RUST_EXTENSION_DUCKDB_PLATFORM "$ENV{DUCKDB_PLATFORM}")
@@ -55,16 +59,27 @@ list(APPEND RUST_EXTENSION_CARGO_BUILD_ARGS --manifest-path
      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml")
 set(RUST_EXTENSION_LIB
     "${RUST_EXTENSION_LIB_DIR}/${RUST_EXTENSION_LIB_NAME}")
+set(RUST_EXTENSION_CARGO_ENV
+    "CARGO_TARGET_DIR=${RUST_EXTENSION_TARGET_DIR}")
+if(RUST_EXTENSION_DUCKDB_PLATFORM STREQUAL "wasm_threads")
+  # Rust's distributed Emscripten std is single-threaded. Rebuild it with the
+  # same Wasm atomics features as DuckDB's threaded bundle.
+  list(APPEND RUST_EXTENSION_CARGO_BUILD_ARGS
+       -Z build-std=std,panic_abort)
+  list(APPEND RUST_EXTENSION_CARGO_ENV
+       "RUSTC_BOOTSTRAP=1"
+       "RUSTFLAGS=-C target-feature=+atomics,+bulk-memory,+mutable-globals")
+endif()
 file(GLOB_RECURSE RUST_EXTENSION_SOURCES CONFIGURE_DEPENDS
      "${CMAKE_CURRENT_SOURCE_DIR}/src/*.rs")
 
 add_custom_command(
   OUTPUT "${RUST_EXTENSION_LIB}"
-  COMMAND
-    "${CMAKE_COMMAND}" -E env "CARGO_TARGET_DIR=${RUST_EXTENSION_TARGET_DIR}"
-    "${CARGO_EXECUTABLE}" ${RUST_EXTENSION_CARGO_BUILD_ARGS}
+  COMMAND "${CMAKE_COMMAND}" -E env ${RUST_EXTENSION_CARGO_ENV}
+          "${CARGO_EXECUTABLE}" ${RUST_EXTENSION_CARGO_BUILD_ARGS}
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" ${RUST_EXTENSION_SOURCES}
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock" ${RUST_EXTENSION_SOURCES}
   COMMENT "Building Rust extension core")
 add_custom_target(rust_extension_build DEPENDS "${RUST_EXTENSION_LIB}")
 
@@ -84,20 +99,35 @@ set(EXTENSION_SOURCES
     src/cpp/storage/rust_bridge_table.cpp
     src/cpp/storage/rust_bridge_transaction_manager.cpp)
 
+if(RUST_EXTENSION_DUCKDB_PLATFORM MATCHES "^wasm_")
+  list(APPEND EXTENSION_SOURCES src/cpp/emscripten_fetch.cpp)
+endif()
+
 add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES})
-build_loadable_extension(${TARGET_NAME} "-warnings" ${EXTENSION_SOURCES})
+if(NOT SUPERHUMAN_DOCS_BUILTIN_ONLY)
+  build_loadable_extension(${TARGET_NAME} "-warnings" ${EXTENSION_SOURCES})
+endif()
 
 add_dependencies(${EXTENSION_NAME} rust_extension_build)
-add_dependencies(${TARGET_NAME}_loadable_extension rust_extension_build)
 target_compile_definitions(
   ${EXTENSION_NAME} PRIVATE RUST_BRIDGE_EXTENSION_ENTRY=${TARGET_NAME}
                             RUST_BRIDGE_EXTENSION_CLASS=${RUST_BRIDGE_EXTENSION_CLASS})
-target_compile_definitions(
-  ${TARGET_NAME}_loadable_extension
-  PRIVATE RUST_BRIDGE_EXTENSION_ENTRY=${TARGET_NAME}
-          RUST_BRIDGE_EXTENSION_CLASS=${RUST_BRIDGE_EXTENSION_CLASS})
+if(NOT SUPERHUMAN_DOCS_BUILTIN_ONLY)
+  add_dependencies(${TARGET_NAME}_loadable_extension rust_extension_build)
+  target_compile_definitions(
+    ${TARGET_NAME}_loadable_extension
+    PRIVATE RUST_BRIDGE_EXTENSION_ENTRY=${TARGET_NAME}
+            RUST_BRIDGE_EXTENSION_CLASS=${RUST_BRIDGE_EXTENSION_CLASS})
+endif()
 
 set(RUST_EXTENSION_SYSTEM_LIBS "")
+if(APPLE OR RUST_EXTENSION_DUCKDB_PLATFORM MATCHES "^osx_")
+  find_library(RUST_EXTENSION_SECURITY_FRAMEWORK Security REQUIRED)
+  find_library(RUST_EXTENSION_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+  list(APPEND RUST_EXTENSION_SYSTEM_LIBS
+       "${RUST_EXTENSION_SECURITY_FRAMEWORK}"
+       "${RUST_EXTENSION_CORE_FOUNDATION_FRAMEWORK}")
+endif()
 if(WIN32 OR RUST_EXTENSION_DUCKDB_PLATFORM MATCHES "^windows_")
   list(APPEND RUST_EXTENSION_SYSTEM_LIBS ntdll userenv ws2_32 bcrypt advapi32
        crypt32 secur32)
@@ -105,11 +135,27 @@ endif()
 
 target_link_libraries(${EXTENSION_NAME} "${RUST_EXTENSION_LIB}"
                       ${RUST_EXTENSION_SYSTEM_LIBS})
-target_link_libraries(${TARGET_NAME}_loadable_extension "${RUST_EXTENSION_LIB}"
-                      ${RUST_EXTENSION_SYSTEM_LIBS})
+if(NOT SUPERHUMAN_DOCS_BUILTIN_ONLY)
+  target_link_libraries(${TARGET_NAME}_loadable_extension
+                        "${RUST_EXTENSION_LIB}" ${RUST_EXTENSION_SYSTEM_LIBS})
+endif()
+
+if(RUST_EXTENSION_DUCKDB_PLATFORM MATCHES "^wasm_")
+  set(RUST_EXTENSION_LINK_TARGETS ${EXTENSION_NAME})
+  if(NOT SUPERHUMAN_DOCS_BUILTIN_ONLY)
+    list(APPEND RUST_EXTENSION_LINK_TARGETS ${TARGET_NAME}_loadable_extension)
+  endif()
+  foreach(RUST_EXTENSION_LINK_TARGET IN LISTS RUST_EXTENSION_LINK_TARGETS)
+    target_link_options(
+      ${RUST_EXTENSION_LINK_TARGET}
+      PUBLIC "SHELL:-sFETCH=1" "SHELL:-sASYNCIFY=1"
+             "SHELL:-sASYNCIFY_STACK_SIZE=262144")
+  endforeach()
+endif()
 
 install(
   TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+install(FILES "${RUST_EXTENSION_LIB}" DESTINATION "${INSTALL_LIB_DIR}")

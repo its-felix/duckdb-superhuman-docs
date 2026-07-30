@@ -1,4 +1,9 @@
 use super::*;
+use std::future::Future;
+
+fn run<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, String> {
+    crate::platform::block_on_result(future)
+}
 
 #[test]
 fn browser_urls_expose_embedded_doc_ids() {
@@ -123,11 +128,11 @@ fn attach_mutation_options_have_defaults_and_parse_explicit_values() {
     defaults
         .options
         .insert("token".to_string(), "explicit-token".to_string());
-    let config = resolve_attach(
+    let config = run(resolve_attach(
         borrow_string("mock-doc"),
         &host,
         (&mut defaults as *mut TestAttachHostContext).cast(),
-    )
+    ))
     .unwrap();
     inspect_attach_config(config, |config| {
         assert!(!config.wait_for_mutations);
@@ -148,11 +153,11 @@ fn attach_mutation_options_have_defaults_and_parse_explicit_values() {
     explicit
         .options
         .insert("allow_mutation_warnings".to_string(), "true".to_string());
-    let config = resolve_attach(
+    let config = run(resolve_attach(
         borrow_string("mock-doc"),
         &host,
         (&mut explicit as *mut TestAttachHostContext).cast(),
-    )
+    ))
     .unwrap();
     inspect_attach_config(config, |config| {
         assert!(config.wait_for_mutations);
@@ -175,11 +180,11 @@ fn browser_url_resolution_supports_scoped_general_and_explicit_credentials() {
         "superhuman_docs:mock-doc".to_string(),
         "scoped-token".to_string(),
     );
-    let config = resolve_attach(
+    let config = run(resolve_attach(
         borrow_string("https://coda.io/d/Mock_dmock-doc/Page_su123"),
         &host,
         (&mut scoped as *mut TestAttachHostContext).cast(),
-    )
+    ))
     .unwrap();
     inspect_attach_config(config, |config| {
         assert_eq!(config.resource, "mock-doc");
@@ -203,11 +208,11 @@ fn browser_url_resolution_supports_scoped_general_and_explicit_credentials() {
         "superhuman_docs:mock-doc".to_string(),
         "canonical-token".to_string(),
     );
-    let config = resolve_attach(
+    let config = run(resolve_attach(
         borrow_string("https://example.com/published/launch-status"),
         &host,
         (&mut general as *mut TestAttachHostContext).cast(),
-    )
+    ))
     .unwrap();
     inspect_attach_config(config, |config| {
         assert_eq!(config.resource, "mock-doc");
@@ -231,11 +236,11 @@ fn browser_url_resolution_supports_scoped_general_and_explicit_credentials() {
         "superhuman_docs:mock-doc".to_string(),
         "ignored-token".to_string(),
     );
-    let config = resolve_attach(
+    let config = run(resolve_attach(
         borrow_string("https://coda.io/d/Mock_dmock-doc"),
         &host,
         (&mut explicit as *mut TestAttachHostContext).cast(),
-    )
+    ))
     .unwrap();
     inspect_attach_config(config, |config| {
         assert_eq!(config.resource, "mock-doc");
@@ -247,11 +252,11 @@ fn browser_url_resolution_supports_scoped_general_and_explicit_credentials() {
 fn noncanonical_browser_url_without_bootstrap_credential_is_targeted_error() {
     let host = test_attach_host();
     let mut context = TestAttachHostContext::default();
-    let error = match resolve_attach(
+    let error = match run(resolve_attach(
         borrow_string("https://example.com/published/launch-status"),
         &host,
         (&mut context as *mut TestAttachHostContext).cast(),
-    ) {
+    )) {
         Ok(config) => {
             crate::exports::rust_ext_free_attach_config(config);
             panic!("browser URL without a bootstrap credential unexpectedly resolved")
@@ -264,12 +269,12 @@ fn noncanonical_browser_url_without_bootstrap_credential_is_targeted_error() {
 
 #[test]
 fn secret_policy_is_implemented_by_rust_callback() {
-    let result = create_secret(RustExtSecretCreateInput {
+    let result = run(create_secret(RustExtSecretCreateInput {
         secret_type: borrow_string("superhuman_docs"),
         provider: borrow_string("config"),
         name: borrow_string("test"),
         ..Default::default()
-    })
+    }))
     .unwrap();
     assert_eq!(result.scope_count, 1);
     assert_eq!(unsafe { &*result.scope }.as_str(), "superhuman_docs:");
@@ -286,14 +291,14 @@ fn secret_policy_is_implemented_by_rust_callback() {
             ..Default::default()
         },
     };
-    let error = match create_secret(RustExtSecretCreateInput {
+    let error = match run(create_secret(RustExtSecretCreateInput {
         secret_type: borrow_string("superhuman_docs"),
         provider: borrow_string("config"),
         name: borrow_string("test"),
         options: &option,
         option_count: 1,
         ..Default::default()
-    }) {
+    })) {
         Ok(result) => {
             free_secret(result);
             panic!("unsupported secret parameter unexpectedly succeeded")

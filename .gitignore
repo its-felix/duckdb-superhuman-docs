@@ -1,5 +1,6 @@
 .cache/
 build/
 .idea/
+.zig-cache/
 .env
 target/

@@ -5,3 +5,6 @@
 	path = duckdb
 	url = https://github.com/duckdb/duckdb.git
 	branch = main
+[submodule "duckdb-wasm"]
+	path = duckdb-wasm
+	url = https://github.com/duckdb/duckdb-wasm.git

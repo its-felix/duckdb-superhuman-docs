@@ -23,3 +23,7 @@ test_superhuman_docs_http_mock:
 test_superhuman_docs_http_real:
 	$(MAKE) release
 	set -a; [ ! -f .env ] || . ./.env; set +a; cargo test real_superhuman_docs_api -- --ignored --nocapture
+
+.PHONY: duckdb_wasm_bundles
+duckdb_wasm_bundles:
+	./scripts/build_duckdb_wasm.sh

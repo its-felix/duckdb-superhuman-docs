@@ -1,4 +1,4 @@
-use superhuman_docs::operations;
+use superhuman_docs_async::operations;
 
 use crate::ffi::{RustExtInputValue, RustExtString, RustExtWriteColumn};
 use crate::model::{SuperhumanDocsClientConfig, SuperhumanDocsTable};
@@ -10,7 +10,7 @@ mod status;
 pub(crate) use payload::{build_equality_query, insert_payload, update_payload};
 use status::wait_for_mutation;
 
-pub(crate) fn insert_rows(
+pub(crate) async fn insert_rows(
     config: &SuperhumanDocsClientConfig,
     table: &SuperhumanDocsTable,
     columns: &[RustExtWriteColumn],
@@ -26,22 +26,29 @@ pub(crate) fn insert_rows(
         value_column_count,
         table.capabilities,
     )?;
-    let response = sdk.execute(|client| {
-        client
-            .tables()
-            .rows()
-            .upsert_rows(operations::UpsertRowsInput {
-                doc_id: config.resource.clone(),
-                table_id_or_name: table.id.clone(),
-                disable_parsing: Some(false),
-                payload,
+    let doc_id = config.resource.clone();
+    let table_id = table.id.clone();
+    let response = sdk
+        .execute(|client| {
+            Box::pin(async move {
+                client
+                    .tables()
+                    .rows()
+                    .upsert_rows(operations::UpsertRowsInput {
+                        doc_id,
+                        table_id_or_name: table_id,
+                        disable_parsing: Some(false),
+                        payload,
+                    })
+                    .await
             })
-    })?;
-    wait_for_mutation(&sdk, config, &response)?;
+        })
+        .await?;
+    wait_for_mutation(&sdk, config, &response).await?;
     Ok(row_count)
 }
 
-pub(crate) fn update_rows(
+pub(crate) async fn update_rows(
     config: &SuperhumanDocsClientConfig,
     table: &SuperhumanDocsTable,
     row_ids: &[RustExtString],
@@ -62,21 +69,32 @@ pub(crate) fn update_rows(
             &values[start..start + columns.len()],
             table.capabilities,
         )?;
-        let response = sdk.execute(|client| {
-            client.tables().rows().update(operations::UpdateRowInput {
-                doc_id: config.resource.clone(),
-                table_id_or_name: table.id.clone(),
-                row_id_or_name: row_id.as_str().to_string(),
-                disable_parsing: Some(false),
-                payload,
+        let doc_id = config.resource.clone();
+        let table_id = table.id.clone();
+        let row_id = row_id.as_str().to_string();
+        let response = sdk
+            .execute(|client| {
+                Box::pin(async move {
+                    client
+                        .tables()
+                        .rows()
+                        .update(operations::UpdateRowInput {
+                            doc_id,
+                            table_id_or_name: table_id,
+                            row_id_or_name: row_id,
+                            disable_parsing: Some(false),
+                            payload,
+                        })
+                        .await
+                })
             })
-        })?;
-        wait_for_mutation(&sdk, config, &response)?;
+            .await?;
+        wait_for_mutation(&sdk, config, &response).await?;
     }
     Ok(row_ids.len())
 }
 
-pub(crate) fn delete_rows(
+pub(crate) async fn delete_rows(
     config: &SuperhumanDocsClientConfig,
     table: &SuperhumanDocsTable,
     row_ids: &[RustExtString],
@@ -85,21 +103,28 @@ pub(crate) fn delete_rows(
         return Ok(0);
     }
     let sdk = SdkClient::new(config)?;
-    let response = sdk.execute(|client| {
-        client
-            .tables()
-            .rows()
-            .delete_rows(operations::DeleteRowsInput {
-                doc_id: config.resource.clone(),
-                table_id_or_name: table.id.clone(),
-                payload: operations::RowsDelete {
-                    row_ids: row_ids
-                        .iter()
-                        .map(|row_id| row_id.as_str().to_string())
-                        .collect(),
-                },
+    let doc_id = config.resource.clone();
+    let table_id = table.id.clone();
+    let affected_count = row_ids.len();
+    let row_ids = row_ids
+        .iter()
+        .map(|row_id| row_id.as_str().to_string())
+        .collect();
+    let response = sdk
+        .execute(|client| {
+            Box::pin(async move {
+                client
+                    .tables()
+                    .rows()
+                    .delete_rows(operations::DeleteRowsInput {
+                        doc_id,
+                        table_id_or_name: table_id,
+                        payload: operations::RowsDelete { row_ids },
+                    })
+                    .await
             })
-    })?;
-    wait_for_mutation(&sdk, config, &response)?;
-    Ok(row_ids.len())
+        })
+        .await?;
+    wait_for_mutation(&sdk, config, &response).await?;
+    Ok(affected_count)
 }

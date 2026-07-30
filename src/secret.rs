@@ -14,7 +14,7 @@ fn option_value(value: RustExtInputValue) -> Result<String, String> {
     }
 }
 
-pub(crate) fn create_secret(
+pub(crate) async fn create_secret(
     input: RustExtSecretCreateInput,
 ) -> Result<RustExtSecretCreateResult, String> {
     let secret_type = input.secret_type.as_str();
@@ -43,7 +43,7 @@ pub(crate) fn create_secret(
     }
 
     let entry = if let Some(credential) = credential {
-        validate_token(&credential)?;
+        validate_token(&credential).await?;
         Some(RustExtNamedValue {
             name: alloc_string("token"),
             value: RustExtInputValue {

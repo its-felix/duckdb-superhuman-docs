@@ -5,6 +5,7 @@ use crate::ffi::*;
 use crate::json::ffi::free_catalog;
 use crate::model::{client_config, table_from_handle};
 use crate::mutation::{delete_rows, insert_rows, update_rows};
+use crate::platform::block_on_result;
 
 #[no_mangle]
 pub extern "C" fn rust_ext_client_load_catalog(
@@ -13,7 +14,7 @@ pub extern "C" fn rust_ext_client_load_catalog(
     err: *mut RustExtError,
 ) -> bool {
     ffi_bool(err, "failed to load Superhuman Docs catalog", || {
-        write_out(out, load_catalog(client_config(config)?)?)
+        write_out(out, block_on_result(load_catalog(client_config(config)?))?)
     })
 }
 
@@ -34,14 +35,14 @@ pub extern "C" fn rust_ext_client_insert_rows(
         let values = slice_from_raw_parts(values_ptr, row_count * value_column_count);
         write_out(
             affected_count,
-            insert_rows(
+            block_on_result(insert_rows(
                 client_config(config)?,
                 table_from_handle(table)?,
                 columns,
                 values,
                 row_count,
                 value_column_count,
-            )?,
+            ))?,
         )
     })
 }
@@ -64,13 +65,13 @@ pub extern "C" fn rust_ext_client_update_rows(
         let values = slice_from_raw_parts(values_ptr, row_count * column_count);
         write_out(
             affected_count,
-            update_rows(
+            block_on_result(update_rows(
                 client_config(config)?,
                 table_from_handle(table)?,
                 row_ids,
                 columns,
                 values,
-            )?,
+            ))?,
         )
     })
 }
@@ -88,7 +89,11 @@ pub extern "C" fn rust_ext_client_delete_rows(
         let row_ids = slice_from_raw_parts(row_ids_ptr, count);
         write_out(
             affected_count,
-            delete_rows(client_config(config)?, table_from_handle(table)?, row_ids)?,
+            block_on_result(delete_rows(
+                client_config(config)?,
+                table_from_handle(table)?,
+                row_ids,
+            ))?,
         )
     })
 }

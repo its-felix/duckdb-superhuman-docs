@@ -1,4 +1,4 @@
-use superhuman_docs::operations;
+use superhuman_docs_async::operations;
 
 use crate::ffi::{RustExtScanBatch, RustExtScanRequest};
 use crate::json::ffi::ffi_scan_batch;
@@ -9,27 +9,37 @@ use crate::model::{
 };
 use crate::sdk::{non_empty_string, SdkClient};
 
-fn list_rows(
+async fn list_rows(
     sdk: &SdkClient,
     doc_id: &str,
     table_id: &str,
     request: SuperhumanDocsRowsRequest,
 ) -> Result<SuperhumanDocsRowsResponse, String> {
     let sort_by = rows_sort_by(&request.sort_by)?;
-    let body = sdk.execute(|client| {
-        client.tables().rows().list(operations::ListRowsInput {
-            doc_id: doc_id.to_string(),
-            table_id_or_name: table_id.to_string(),
-            query: non_empty_string(&request.query),
-            sort_by,
-            use_column_names: Some(false),
-            value_format: Some(operations::ValueFormat::Rich),
-            visible_only: Some(false),
-            limit: Some(request.limit as i32),
-            page_token: non_empty_string(&request.page_token),
-            sync_token: non_empty_string(&request.sync_token),
+    let doc_id = doc_id.to_string();
+    let table_id = table_id.to_string();
+    let body = sdk
+        .execute(|client| {
+            Box::pin(async move {
+                client
+                    .tables()
+                    .rows()
+                    .list(operations::ListRowsInput {
+                        doc_id,
+                        table_id_or_name: table_id,
+                        query: non_empty_string(&request.query),
+                        sort_by,
+                        use_column_names: Some(false),
+                        value_format: Some(operations::ValueFormat::Rich),
+                        visible_only: Some(false),
+                        limit: Some(request.limit as i32),
+                        page_token: non_empty_string(&request.page_token),
+                        sync_token: non_empty_string(&request.sync_token),
+                    })
+                    .await
+            })
         })
-    })?;
+        .await?;
     rows_from_json(&body)
 }
 
@@ -99,10 +109,10 @@ impl ScanHandle {
         }
     }
 
-    pub(crate) fn next_batch(&mut self) -> Result<RustExtScanBatch, String> {
+    pub(crate) async fn next_batch(&mut self) -> Result<RustExtScanBatch, String> {
         while !self.finished {
             let request = self.request();
-            let response = list_rows(&self.sdk, &self.doc_id, &self.table_id, request)?;
+            let response = list_rows(&self.sdk, &self.doc_id, &self.table_id, request).await?;
             self.next_page_token = response.next_page_token;
             self.next_sync_token = response.next_sync_token;
             if self.next_page_token.is_empty()

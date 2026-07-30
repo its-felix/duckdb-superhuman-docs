@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use crate::attach::resolve_attach;
 use crate::constants::*;
 use crate::ffi::*;
+use crate::platform::block_on_result;
 
 fn host_callback_result(success: bool, error: RustExtError, fallback: &str) -> Result<(), String> {
     let message = error.message.as_str().to_string();
@@ -67,6 +68,6 @@ pub extern "C" fn rust_ext_resolve_attach(
     ffi_bool(
         err,
         "failed to resolve Superhuman Docs attach config",
-        || write_out(out, resolve_attach(path, host, userdata)?),
+        || write_out(out, block_on_result(resolve_attach(path, host, userdata))?),
     )
 }

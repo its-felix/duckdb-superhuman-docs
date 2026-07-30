@@ -4,6 +4,7 @@ use crate::client::ScanHandle;
 use crate::ffi::*;
 use crate::json::ffi::free_scan_batch;
 use crate::model::{client_config, column_from_handle, row_from_handle, table_from_handle};
+use crate::platform::block_on_result;
 use crate::scan::scan_value;
 
 #[no_mangle]
@@ -64,7 +65,7 @@ pub extern "C" fn rust_ext_scan_next(
         "failed to fetch next Superhuman Docs scan batch",
         || {
             let handle = mut_from_raw(scan.cast::<ScanHandle>(), "scan handle")?;
-            write_out(out, handle.next_batch()?)
+            write_out(out, block_on_result(handle.next_batch())?)
         },
     )
 }

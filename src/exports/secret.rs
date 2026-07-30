@@ -1,4 +1,5 @@
 use crate::ffi::*;
+use crate::platform::block_on_result;
 use crate::secret::{create_secret, free_secret};
 
 #[no_mangle]
@@ -8,7 +9,7 @@ pub extern "C" fn rust_ext_create_secret(
     err: *mut RustExtError,
 ) -> bool {
     ffi_bool(err, "failed to create extension secret", || {
-        write_out(out, create_secret(input)?)
+        write_out(out, block_on_result(create_secret(input))?)
     })
 }
 

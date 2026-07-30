@@ -7,9 +7,16 @@ edition = "2021"
 name = "superhuman_docs_rust"
 crate-type = ["staticlib"]
 
+[profile.release]
+# Rust's Emscripten target otherwise enables native Wasm exceptions, which
+# cannot be linked into the legacy-exception MVP DuckDB-Wasm bundle.
+panic = "abort"
+
 [dependencies]
 serde_json = { version = "1", features = ["arbitrary_precision"] }
-superhuman-docs = { git = "https://github.com/its-felix/superhuman-docs-sdk.git", tag = "v0.4.1" }
+superhuman-docs-async = { git = "https://github.com/its-felix/superhuman-docs-sdk.git", tag = "v0.5.0" }
+tokio = { version = "1", features = ["sync"] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+[target.'cfg(not(target_os = "emscripten"))'.dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }

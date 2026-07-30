@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
-use superhuman_docs::operations;
-use superhuman_docs::DEFAULT_BASE_URL;
+use superhuman_docs_async::operations;
+use superhuman_docs_async::DEFAULT_BASE_URL;
 
 use crate::constants::{
     ALLOW_MUTATION_WARNINGS_OPTION, API_BASE_OPTION, INCLUDE_ROW_METADATA_OPTION,
@@ -46,7 +46,7 @@ fn parse_mutation_timeout(value: &str) -> Result<u64, String> {
     Ok(seconds)
 }
 
-pub(crate) fn resolve_attach(
+pub(crate) async fn resolve_attach(
     path: RustExtString,
     host: *const RustExtAttachHost,
     userdata: *mut c_void,
@@ -111,7 +111,8 @@ pub(crate) fn resolve_attach(
             &endpoint,
             host,
             userdata,
-        )?
+        )
+        .await?
     } else {
         let credential = if explicit_credential.is_empty() {
             resolve_stored_credential(input_resource, host, userdata)?
@@ -136,7 +137,7 @@ pub(crate) fn resolve_attach(
     })
 }
 
-fn resolve_browser_url(
+async fn resolve_browser_url(
     browser_url: &str,
     explicit_credential: &str,
     endpoint: &str,
@@ -170,12 +171,19 @@ fn resolve_browser_url(
     };
 
     let sdk = SdkClient::at(endpoint, &bootstrap_credential)?;
-    let body = sdk.execute(|client| {
-        client.resolve_browser_link(operations::ResolveBrowserLinkInput {
-            url: browser_url.to_string(),
-            degrade_gracefully: Some(false),
+    let browser_url = browser_url.to_string();
+    let body = sdk
+        .execute(|client| {
+            Box::pin(async move {
+                client
+                    .resolve_browser_link(operations::ResolveBrowserLinkInput {
+                        url: browser_url,
+                        degrade_gracefully: Some(false),
+                    })
+                    .await
+            })
         })
-    })?;
+        .await?;
     let doc_id = doc_id_from_resolved_link(&body)?;
     let credential = if explicit_credential.is_empty() {
         let canonical = owned_secret(

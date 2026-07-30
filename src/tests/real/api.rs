@@ -10,12 +10,20 @@ pub(super) struct PageCleanup {
 impl Drop for PageCleanup {
     fn drop(&mut self) {
         if let Ok(sdk) = SdkClient::at(&self.endpoint, &self.credential) {
-            let _ = sdk.execute(|client| {
-                client.docs().pages().delete(operations::DeletePageInput {
-                    doc_id: self.resource.clone(),
-                    page_id_or_name: self.page_id.clone(),
+            let resource = self.resource.clone();
+            let page_id = self.page_id.clone();
+            let _ = crate::platform::block_on_result(sdk.execute(|client| {
+                Box::pin(async move {
+                    client
+                        .docs()
+                        .pages()
+                        .delete(operations::DeletePageInput {
+                            doc_id: resource,
+                            page_id_or_name: page_id,
+                        })
+                        .await
                 })
-            });
+            }));
         }
     }
 }
@@ -24,11 +32,11 @@ pub(super) fn required_env(name: &str) -> String {
     env::var(name).unwrap_or_else(|_| panic!("{name} must be set in the environment"))
 }
 
-fn api_json<T>(
-    sdk: &SdkClient,
-    operation: impl FnOnce(&Client) -> Result<T, Error>,
-) -> Result<Value, String> {
-    json_body(sdk.execute(operation)?)
+fn api_json<T, F>(sdk: &SdkClient, operation: F) -> Result<Value, String>
+where
+    F: for<'a> FnOnce(&'a Client) -> crate::sdk::OperationFuture<'a, T>,
+{
+    json_body(crate::platform::block_on_result(sdk.execute(operation))?)
 }
 
 fn json_body(body: String) -> Result<Value, String> {
@@ -39,10 +47,10 @@ fn json_body(body: String) -> Result<Value, String> {
     }
 }
 
-fn paged_items<T>(
-    sdk: &SdkClient,
-    mut operation: impl FnMut(&Client, Option<String>) -> Result<T, Error>,
-) -> Result<Vec<Value>, String> {
+fn paged_items<T, F>(sdk: &SdkClient, mut operation: F) -> Result<Vec<Value>, String>
+where
+    F: for<'a> FnMut(&'a Client, Option<String>) -> crate::sdk::OperationFuture<'a, T>,
+{
     let mut out = Vec::new();
     let mut page_token = None;
     loop {
@@ -90,27 +98,35 @@ pub(super) fn create_page_with_html(
     html: String,
 ) -> Result<Value, String> {
     let sdk = SdkClient::at(endpoint, credential)?;
-    let body = sdk.execute(|client| {
-        client.docs().pages().create(operations::CreatePageInput {
-            doc_id: resource.to_string(),
-            payload: operations::PageCreate {
-                name: Some(page_name.to_string()),
-                subtitle: None,
-                icon_name: None,
-                image_url: None,
-                parent_page_id: None,
-                page_content: Some(operations::PageCreateContent::Canvas(
-                    operations::PageCreateCanvasContent {
-                        type_: operations::PageType::Canvas,
-                        canvas_content: operations::PageContent {
-                            format: operations::PageContentFormat::Html,
-                            content: html,
-                        },
+    let resource = resource.to_string();
+    let page_name = page_name.to_string();
+    let body = crate::platform::block_on_result(sdk.execute(|client| {
+        Box::pin(async move {
+            client
+                .docs()
+                .pages()
+                .create(operations::CreatePageInput {
+                    doc_id: resource,
+                    payload: operations::PageCreate {
+                        name: Some(page_name),
+                        subtitle: None,
+                        icon_name: None,
+                        image_url: None,
+                        parent_page_id: None,
+                        page_content: Some(operations::PageCreateContent::Canvas(
+                            operations::PageCreateCanvasContent {
+                                type_: operations::PageType::Canvas,
+                                canvas_content: operations::PageContent {
+                                    format: operations::PageContentFormat::Html,
+                                    content: html,
+                                },
+                            },
+                        )),
                     },
-                )),
-            },
+                })
+                .await
         })
-    })?;
+    }))?;
     json_body(body)
 }
 
@@ -124,12 +140,18 @@ pub(super) fn wait_for_page_table(
     let sdk = SdkClient::at(endpoint, credential)?;
     for _ in 0..40 {
         let tables = paged_items(&sdk, |client, page_token| {
-            client.tables().list(operations::ListTablesInput {
-                doc_id: resource.to_string(),
-                limit: Some(100),
-                page_token,
-                sort_by: None,
-                table_types: None,
+            let resource = resource.to_string();
+            Box::pin(async move {
+                client
+                    .tables()
+                    .list(operations::ListTablesInput {
+                        doc_id: resource,
+                        limit: Some(100),
+                        page_token,
+                        sort_by: None,
+                        table_types: None,
+                    })
+                    .await
             })
         })?;
         for table in &tables {
@@ -164,16 +186,21 @@ pub(super) fn assert_required_columns(
 ) -> Result<(), String> {
     let sdk = SdkClient::at(endpoint, credential)?;
     let columns = paged_items(&sdk, |client, page_token| {
-        client
-            .tables()
-            .columns()
-            .list(operations::ListColumnsInput {
-                doc_id: resource.to_string(),
-                table_id_or_name: table_id.to_string(),
-                limit: Some(100),
-                page_token,
-                visible_only: Some(false),
-            })
+        let resource = resource.to_string();
+        let table_id = table_id.to_string();
+        Box::pin(async move {
+            client
+                .tables()
+                .columns()
+                .list(operations::ListColumnsInput {
+                    doc_id: resource,
+                    table_id_or_name: table_id,
+                    limit: Some(100),
+                    page_token,
+                    visible_only: Some(false),
+                })
+                .await
+        })
     })?;
     for required in ["Name", "Done", "Amount"] {
         let found = columns

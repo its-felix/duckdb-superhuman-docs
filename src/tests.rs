@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use superhuman_docs::{operations, Client, Error, DEFAULT_BASE_URL};
+use superhuman_docs_async::{operations, Client, DEFAULT_BASE_URL};
 
 static NETWORK_UNIT_TEST_LOCK: Mutex<()> = Mutex::new(());
 

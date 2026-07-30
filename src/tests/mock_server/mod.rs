@@ -44,7 +44,12 @@ impl MockSuperhumanDocsServer {
                 break;
             }
             match listener.accept() {
-                Ok((stream, _)) => handle_mock_connection(stream, &thread_requests, whoami_status),
+                Ok((stream, _)) => {
+                    stream
+                        .set_nonblocking(false)
+                        .expect("failed to configure mock Superhuman Docs connection");
+                    handle_mock_connection(stream, &thread_requests, whoami_status)
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
                 }

@@ -1,6 +1,10 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::time::Duration;
 
-use superhuman_docs::{Client, ClientOptions, Error, Response, DEFAULT_BASE_URL};
+use superhuman_docs_async::{Client, ClientOptions, Error, Response, DEFAULT_BASE_URL};
 
 use crate::model::SuperhumanDocsClientConfig;
 
@@ -19,8 +23,11 @@ pub(crate) fn non_empty_string(value: &str) -> Option<String> {
 pub(crate) struct SdkClient {
     client: Client,
     state: Arc<Mutex<TransportState>>,
-    execution: Mutex<()>,
+    execution: tokio::sync::Mutex<()>,
 }
+
+pub(crate) type OperationFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 impl SdkClient {
     pub(crate) fn new(config: &SuperhumanDocsClientConfig) -> Result<Self, String> {
@@ -34,48 +41,67 @@ impl SdkClient {
 
     pub(crate) fn at(base_url: &str, _credential: &str) -> Result<Self, String> {
         let state = Arc::new(Mutex::new(TransportState::default()));
-        let transport = HttpTransport {
-            #[cfg(not(target_arch = "wasm32"))]
-            state: Arc::clone(&state),
-            #[cfg(not(target_arch = "wasm32"))]
-            agent: ureq::AgentBuilder::new().build(),
-            #[cfg(not(target_arch = "wasm32"))]
-            credential: _credential.to_string(),
-        };
+        let transport = HttpTransport::new(Arc::clone(&state), _credential.to_string())
+            .map_err(|error| error.to_string())?;
+        Self::with_transport(base_url, state, transport)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn at_with_timeout(
+        base_url: &str,
+        credential: &str,
+        timeout: Duration,
+    ) -> Result<Self, String> {
+        let state = Arc::new(Mutex::new(TransportState::default()));
+        let transport =
+            HttpTransport::new_with_timeout(Arc::clone(&state), credential.to_string(), timeout)
+                .map_err(|error| error.to_string())?;
+        Self::with_transport(base_url, state, transport)
+    }
+
+    fn with_transport(
+        base_url: &str,
+        state: Arc<Mutex<TransportState>>,
+        transport: HttpTransport,
+    ) -> Result<Self, String> {
         let options = ClientOptions::new(transport).with_base_url(normalize_api_base(base_url));
         let client = Client::new(options).map_err(|error| error.to_string())?;
         Ok(Self {
             client,
             state,
-            execution: Mutex::new(()),
+            execution: tokio::sync::Mutex::new(()),
         })
     }
 
-    pub(crate) fn execute<T>(
-        &self,
-        operation: impl FnOnce(&Client) -> Result<T, Error>,
-    ) -> Result<String, String> {
-        self.execute_inner(None, operation)?
+    pub(crate) async fn execute<T, F>(&self, operation: F) -> Result<String, String>
+    where
+        F: for<'a> FnOnce(&'a Client) -> OperationFuture<'a, T>,
+    {
+        self.execute_inner(None, operation)
+            .await?
             .ok_or_else(|| "SDK transport returned an unexpected accepted status".to_string())
     }
 
-    pub(crate) fn execute_accepting_status<T>(
+    pub(crate) async fn execute_accepting_status<T, F>(
         &self,
         accepted_status: u16,
-        operation: impl FnOnce(&Client) -> Result<T, Error>,
-    ) -> Result<Option<String>, String> {
-        self.execute_inner(Some(accepted_status), operation)
+        operation: F,
+    ) -> Result<Option<String>, String>
+    where
+        F: for<'a> FnOnce(&'a Client) -> OperationFuture<'a, T>,
+    {
+        self.execute_inner(Some(accepted_status), operation).await
     }
 
-    fn execute_inner<T>(
+    async fn execute_inner<T, F>(
         &self,
         accepted_status: Option<u16>,
-        operation: impl FnOnce(&Client) -> Result<T, Error>,
-    ) -> Result<Option<String>, String> {
-        let _execution = self
-            .execution
-            .lock()
-            .map_err(|_| "SDK client execution lock poisoned".to_string())?;
+        operation: F,
+    ) -> Result<Option<String>, String>
+    where
+        F: for<'a> FnOnce(&'a Client) -> OperationFuture<'a, T>,
+    {
+        let _execution = self.execution.lock().await;
         {
             let mut state = self
                 .state
@@ -84,7 +110,7 @@ impl SdkClient {
             state.exchange = None;
         }
 
-        let result = operation(&self.client);
+        let result = operation(&self.client).await;
         let exchange = {
             let mut state = self
                 .state
@@ -109,25 +135,33 @@ impl SdkClient {
             (Ok(_), None) => Err("SDK transport returned no response".to_string()),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) async fn send_raw(
+        &self,
+        request: superhuman_docs_async::Request,
+    ) -> Result<Response, Error> {
+        self.client.send_request(request).await
+    }
 }
 
 fn response_body(response: Response) -> Result<String, String> {
     String::from_utf8(response.body).map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn validate_token_at(base_url: &str, credential: &str) -> Result<(), String> {
+pub(crate) async fn validate_token_at(base_url: &str, credential: &str) -> Result<(), String> {
     let sdk = SdkClient::at(base_url, credential)?;
-    sdk.execute(|client| client.whoami(superhuman_docs::operations::WhoamiInput {}))?;
+    sdk.execute(|client| {
+        Box::pin(async move {
+            client
+                .whoami(superhuman_docs_async::operations::WhoamiInput {})
+                .await
+        })
+    })
+    .await?;
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn validate_token(credential: &str) -> Result<(), String> {
-    validate_token_at(DEFAULT_BASE_URL, credential)
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn validate_token(_credential: &str) -> Result<(), String> {
-    Err("Whoami is not available in DuckDB-Wasm builds".to_string())
+pub(crate) async fn validate_token(credential: &str) -> Result<(), String> {
+    validate_token_at(DEFAULT_BASE_URL, credential).await
 }

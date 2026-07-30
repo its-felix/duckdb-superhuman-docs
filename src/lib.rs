@@ -6,6 +6,7 @@ mod ffi;
 mod json;
 mod model;
 mod mutation;
+mod platform;
 mod scan;
 mod sdk;
 mod secret;

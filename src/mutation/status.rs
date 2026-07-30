@@ -1,7 +1,7 @@
 use serde_json::Value;
-use std::thread;
+use std::future::Future;
 use std::time::{Duration, Instant};
-use superhuman_docs::operations;
+use superhuman_docs_async::operations;
 
 use crate::model::SuperhumanDocsClientConfig;
 use crate::sdk::SdkClient;
@@ -34,7 +34,7 @@ fn mutation_status(body: &str) -> Result<(bool, Option<String>), String> {
     Ok((completed, warning))
 }
 
-fn poll_mutation_status<Fetch, Elapsed, Sleep>(
+async fn poll_mutation_status<Fetch, FetchFuture, Elapsed, Sleep, SleepFuture>(
     request_id: &str,
     timeout: Duration,
     allow_warnings: bool,
@@ -43,9 +43,11 @@ fn poll_mutation_status<Fetch, Elapsed, Sleep>(
     mut sleep: Sleep,
 ) -> Result<(), String>
 where
-    Fetch: FnMut() -> Result<String, String>,
+    Fetch: FnMut() -> FetchFuture,
+    FetchFuture: Future<Output = Result<String, String>>,
     Elapsed: FnMut() -> Duration,
-    Sleep: FnMut(Duration),
+    Sleep: FnMut(Duration) -> SleepFuture,
+    SleepFuture: Future<Output = ()>,
 {
     let mut first_check = true;
     loop {
@@ -57,7 +59,7 @@ where
         }
         first_check = false;
 
-        let body = fetch().map_err(|error| {
+        let body = fetch().await.map_err(|error| {
             format!("failed to check Superhuman Docs mutation {request_id}: {error}")
         })?;
         let (completed, warning) = mutation_status(&body).map_err(|error| {
@@ -81,11 +83,11 @@ where
                 timeout.as_secs()
             ));
         }
-        sleep(MUTATION_POLL_INTERVAL.min(timeout - elapsed_now));
+        sleep(MUTATION_POLL_INTERVAL.min(timeout - elapsed_now)).await;
     }
 }
 
-pub(super) fn wait_for_mutation(
+pub(super) async fn wait_for_mutation(
     sdk: &SdkClient,
     config: &SuperhumanDocsClientConfig,
     response_body: &str,
@@ -101,24 +103,32 @@ pub(super) fn wait_for_mutation(
         timeout,
         config.allow_mutation_warnings,
         || {
-            let response = sdk.execute_accepting_status(404, |client| {
-                client
-                    .mutation_status()
-                    .read(operations::GetMutationStatusInput {
-                        request_id: request_id.clone(),
+            let request_id = request_id.clone();
+            async move {
+                let response = sdk
+                    .execute_accepting_status(404, |client| {
+                        Box::pin(async move {
+                            client
+                                .mutation_status()
+                                .read(operations::GetMutationStatusInput { request_id })
+                                .await
+                        })
                     })
-            })?;
-            Ok(response.unwrap_or_else(|| r#"{"completed":false}"#.to_string()))
+                    .await?;
+                Ok(response.unwrap_or_else(|| r#"{"completed":false}"#.to_string()))
+            }
         },
         || started.elapsed(),
-        thread::sleep,
+        crate::platform::sleep,
     )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::collections::VecDeque;
+    use std::future::ready;
 
     use super::*;
 
@@ -154,22 +164,25 @@ mod tests {
     fn polling_checks_immediately_and_retries_until_complete() {
         let responses = Cell::new(0_u32);
         let elapsed = Cell::new(Duration::ZERO);
-        poll_mutation_status(
+        crate::platform::block_on_result(poll_mutation_status(
             "request-1",
             Duration::from_secs(5),
             false,
             || {
                 let count = responses.get() + 1;
                 responses.set(count);
-                Ok(if count == 1 {
+                ready(Ok(if count == 1 {
                     r#"{"completed":false}"#.to_string()
                 } else {
                     r#"{"completed":true}"#.to_string()
-                })
+                }))
             },
             || elapsed.get(),
-            |duration| elapsed.set(elapsed.get() + duration),
-        )
+            |duration| {
+                elapsed.set(elapsed.get() + duration);
+                ready(())
+            },
+        ))
         .unwrap();
         assert_eq!(responses.get(), 2);
         assert_eq!(elapsed.get(), Duration::from_secs(1));
@@ -177,26 +190,34 @@ mod tests {
 
     #[test]
     fn polling_applies_warning_policy() {
-        let error = poll_mutation_status(
+        let error = crate::platform::block_on_result(poll_mutation_status(
             "request-warning",
             Duration::from_secs(5),
             false,
-            || Ok(r#"{"completed":true,"warning":"partial result"}"#.to_string()),
+            || {
+                ready(Ok(
+                    r#"{"completed":true,"warning":"partial result"}"#.to_string()
+                ))
+            },
             || Duration::ZERO,
-            |_| {},
-        )
+            |_| ready(()),
+        ))
         .unwrap_err();
         assert!(error.contains("completed with a warning"));
         assert!(error.contains("cannot be rolled back"));
 
-        poll_mutation_status(
+        crate::platform::block_on_result(poll_mutation_status(
             "request-warning",
             Duration::from_secs(5),
             true,
-            || Ok(r#"{"completed":true,"warning":"partial result"}"#.to_string()),
+            || {
+                ready(Ok(
+                    r#"{"completed":true,"warning":"partial result"}"#.to_string()
+                ))
+            },
             || Duration::ZERO,
-            |_| {},
-        )
+            |_| ready(()),
+        ))
         .unwrap();
     }
 
@@ -207,14 +228,17 @@ mod tests {
             r#"{"completed":false}"#.to_string(),
             r#"{"completed":false}"#.to_string(),
         ]);
-        let error = poll_mutation_status(
+        let error = crate::platform::block_on_result(poll_mutation_status(
             "request-timeout",
             Duration::from_secs(1),
             false,
-            || Ok(responses.pop_front().unwrap()),
+            || ready(Ok(responses.pop_front().unwrap())),
             || elapsed.get(),
-            |duration| elapsed.set(elapsed.get() + duration),
-        )
+            |duration| {
+                elapsed.set(elapsed.get() + duration);
+                ready(())
+            },
+        ))
         .unwrap_err();
         assert!(error.contains("did not complete within 1 seconds"));
         assert!(error.contains("may occur later"));

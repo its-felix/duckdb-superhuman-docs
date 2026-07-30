@@ -150,6 +150,7 @@ values.
 - `src/include/` contains the public C ABI and C++ bridge headers.
 - `test/sql/` contains DuckDB sqllogictest files loaded through `extension_config.cmake`.
 - `Cargo.toml` builds the Rust static library linked by the DuckDB C++ extension.
+- `duckdb-wasm/` is a pinned upstream submodule used to produce browser bundles; see `docs/duckdb-wasm.md`.
 
 ## Testing
 
@@ -159,8 +160,10 @@ make release
 make test
 ```
 
-`cargo test` runs the Rust unit tests for the ABI implementation, request body generation, and response parsing. The
-DuckDB build invokes Cargo to produce a Rust static library and links it into the loadable extension.
+`cargo test` runs the Rust unit tests for the ABI implementation, request body generation, response parsing, and the
+native async HTTP transport. Transport coverage includes all supported request verbs, JSON bodies on `DELETE`, empty
+and non-2xx responses, malformed HTTP, timeouts, authentication headers, and one-attempt behavior. The DuckDB build
+invokes Cargo to produce a Rust static library and links it into the loadable extension.
 
 The DuckDB extension Makefile targets remain available:
 
@@ -202,8 +205,11 @@ empty.
 - Explicit DuckDB transactions are not supported for attached Superhuman Docs databases. Use autocommit statements so the extension
   does not imply rollback semantics that Superhuman Docs cannot provide.
 - Unsupported Superhuman Docs values use DuckDB's `JSON` type; all array-valued columns preserve their mapped inner type.
-- API routing and request construction use the `superhuman-docs` Rust SDK resource clients at tag `v0.4.1`; the extension
-  supplies a custom transport for authentication, connection reuse, and raw Superhuman Docs value compatibility.
+- API routing and request construction use the `superhuman-docs-async` Rust SDK resource clients. The existing
+  blocking `superhuman-docs` crate remains available as a separate library.
+  Native builds use a shared Tokio runtime and a shared Reqwest client with Rustls, a 30-second request timeout, and no
+  automatic retries. Browser Emscripten builds use Emscripten Fetch through the extension's C++ shim. DuckDB-facing C
+  exports remain synchronous: native builds block on Tokio, while Emscripten builds yield through Asyncify.
 
 ### Rust bridge boundary
 

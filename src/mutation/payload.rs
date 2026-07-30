@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use superhuman_docs::operations;
+use superhuman_docs_async::operations;
 
 use crate::ffi::*;
 use crate::model::column_from_handle;

@@ -21,8 +21,9 @@ jobs:
       GEN: ninja
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: Initialize native build submodules
+        run: git submodule update --init --recursive -- duckdb extension-ci-tools
 
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y ninja-build

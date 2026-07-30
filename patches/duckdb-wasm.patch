@@ -1,0 +1,1327 @@
+diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
+index 636486e..cd54458 100644
+--- a/lib/CMakeLists.txt
++++ b/lib/CMakeLists.txt
+@@ -12,6 +12,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ set(ignoreMe "${DUCKDB_WASM_VERSION}")
+ 
+ option(DUCKDB_WASM_LOADABLE_EXTENSIONS "Build with loadable extensions" OFF)
++set(SUPERHUMAN_DOCS_EXTENSION_DIR "" CACHE PATH
++    "Path to the duckdb-superhuman-docs extension source tree")
+ 
+ if(DEFINED ENV{DUCKDB_WASM_LOADABLE_EXTENSIONS})
+   set(DUCKDB_WASM_LOADABLE_EXTENSIONS ON)
+@@ -82,6 +84,10 @@ endif ()
+ set(DUCKDB_PLATFORM "wasm_mvp")
+ 
+ if(EMSCRIPTEN)
++  if(SUPERHUMAN_DOCS_EXTENSION_DIR)
++    set(WASM_LINK_FLAGS
++        "${WASM_LINK_FLAGS} -sFETCH=1 -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=262144")
++  endif()
+   # Bump stack size from default 64KB to 1MB
+   set(WASM_LINK_FLAGS "${WASM_LINK_FLAGS} -sSTACK_SIZE=1048576")
+   # Release build
+@@ -245,6 +251,16 @@ add_library(
+   ${CMAKE_SOURCE_DIR}/src/webdb.cc
+   ${CMAKE_SOURCE_DIR}/src/webdb_api.cc)
+ 
++if(SUPERHUMAN_DOCS_EXTENSION_DIR)
++  target_compile_definitions(duckdb_web PRIVATE DUCKDB_SUPERHUMAN_DOCS_EXTENSION=1)
++  add_library(
++    duckdb_web_superhuman_docs
++    ${CMAKE_SOURCE_DIR}/src/extensions/superhuman_docs_extension.cc)
++  target_include_directories(
++    duckdb_web_superhuman_docs
++    PRIVATE ${SUPERHUMAN_DOCS_EXTENSION_DIR}/src/include)
++endif()
++
+ if (DUCKDB_WASM_LOADABLE_EXTENSIONS)
+   set(EXTENSION_CACHE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.ccache/extension")
+   set(JSON_EXTENSION_CACHE_FILE "${EXTENSION_CACHE_DIR}/json")
+@@ -272,6 +288,13 @@ else()
+   target_link_libraries(duckdb_web duckdb duckdb_web_parquet ${DUCKDB_WEB_JSON} arrow rapidjson ${THREAD_LIBS})
+   target_link_libraries(duckdb_web_parquet duckdb duckdb_parquet)
+   target_link_libraries(duckdb_web_json duckdb duckdb_json)
++  if(SUPERHUMAN_DOCS_EXTENSION_DIR)
++    target_link_libraries(
++      duckdb_web duckdb_web_superhuman_docs)
++    target_link_libraries(
++      duckdb_web_superhuman_docs
++      duckdb duckdb_superhuman_docs duckdb_superhuman_docs_rust)
++  endif()
+ endif()
+ 
+ # ---------------------------------------------------------------------------
+@@ -296,7 +319,7 @@ if(EMSCRIPTEN)
+       -s MAXIMUM_MEMORY=4GB \
+       -s MODULARIZE=1 \
+       -s EXPORT_NAME='DuckDB' \
+-      -s EXPORTED_RUNTIME_METHODS='[\"ccall\", \"stackSave\", \"stackAlloc\", \"stackRestore\", \"createDyncallWrapper\", \"getTempRet0\", \"setTempRet0\"]' \
++      -s EXPORTED_RUNTIME_METHODS='[\"ccall\", \"stackSave\", \"stackAlloc\", \"stackRestore\", \"dynCall\", \"getTempRet0\", \"setTempRet0\", \"HEAPU8\", \"HEAP32\", \"HEAPF64\"]' \
+       --js-library=${CMAKE_SOURCE_DIR}/js-stubs.js")
+ 
+ endif()
+@@ -332,4 +355,4 @@ if(NOT EMSCRIPTEN)
+ 
+   add_executable(tester ${TEST_CC})
+   target_link_libraries(tester ${TEST_LIBS})
+-endif()
+\ No newline at end of file
++endif()
+diff --git a/lib/cmake/duckdb.cmake b/lib/cmake/duckdb.cmake
+index 9639a49..db0d256 100644
+--- a/lib/cmake/duckdb.cmake
++++ b/lib/cmake/duckdb.cmake
+@@ -16,14 +16,36 @@ set(DUCKDB_CXX_FLAGS "${DUCKDB_CXX_FLAGS} -Wno-unqualified-std-cast-call -DDUCKD
+ message("DUCKDB_CXX_FLAGS=${DUCKDB_CXX_FLAGS}")
+ 
+ set(DUCKDB_EXTENSIONS "json;core_functions")
++set(DUCKDB_EXTENSION_CONFIGS "")
++if(SUPERHUMAN_DOCS_EXTENSION_DIR)
++  list(APPEND DUCKDB_EXTENSION_CONFIGS
++       "${SUPERHUMAN_DOCS_EXTENSION_DIR}/extension_config.cmake")
++endif()
+ # Escape semicolons in DUCKDB_EXTENSIONS before passing to ExternalProject_Add
+ string(REPLACE ";" "$<SEMICOLON>" DUCKDB_EXTENSIONS_PACKED "${DUCKDB_EXTENSIONS}")
++string(REPLACE ";" "$<SEMICOLON>" DUCKDB_EXTENSION_CONFIGS_PACKED
++               "${DUCKDB_EXTENSION_CONFIGS}")
+ 
+ set(USE_WASM_THREADS FALSE)
+ if(DUCKDB_PLATFORM STREQUAL "wasm_threads")
+   set(USE_WASM_THREADS TRUE)
+ endif()
+ 
++set(DUCKDB_BUILD_BYPRODUCTS
++    <INSTALL_DIR>/lib/libduckdb_static.a
++    <INSTALL_DIR>/lib/libduckdb_fmt.a
++    <INSTALL_DIR>/lib/libduckdb_utf8proc.a
++    <INSTALL_DIR>/lib/libduckdb_fastpforlib.a
++    <INSTALL_DIR>/lib/libparquet_extension.a
++    <INSTALL_DIR>/lib/libcore_functions_extension.a
++    <INSTALL_DIR>/lib/libduckdb_generated_extension_loader.a
++    <INSTALL_DIR>/lib/libjson_extension.a)
++if(SUPERHUMAN_DOCS_EXTENSION_DIR)
++  list(APPEND DUCKDB_BUILD_BYPRODUCTS
++       <INSTALL_DIR>/lib/libsuperhuman_docs_extension.a
++       <INSTALL_DIR>/lib/libsuperhuman_docs_rust.a)
++endif()
++
+ ExternalProject_Add(
+   duckdb_ep
+   SOURCE_DIR "${DUCKDB_CORE_DIR}"
+@@ -40,6 +62,8 @@ ExternalProject_Add(
+              -DCMAKE_BUILD_TYPE=${DUCKDB_BUILD_TYPE}
+              -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+              -DBUILD_EXTENSIONS=${DUCKDB_EXTENSIONS_PACKED}
++             -DDUCKDB_EXTENSION_CONFIGS=${DUCKDB_EXTENSION_CONFIGS_PACKED}
++             -DSUPERHUMAN_DOCS_BUILTIN_ONLY=ON
+              -DSKIP_EXTENSIONS=jemalloc
+              -DBUILD_SHELL=FALSE
+              -DBUILD_UNITTESTS=FALSE
+@@ -47,15 +71,7 @@ ExternalProject_Add(
+              -DUSE_WASM_THREADS=${USE_WASM_THREADS}
+              -DDUCKDB_EXPLICIT_PLATFORM=${DUCKDB_EXPLICIT_PLATFORM}
+              -DSMALLER_BINARY=1
+-  BUILD_BYPRODUCTS
+-    <INSTALL_DIR>/lib/libduckdb_static.a
+-    <INSTALL_DIR>/lib/libduckdb_fmt.a
+-    <INSTALL_DIR>/lib/libduckdb_utf8proc.a
+-    <INSTALL_DIR>/lib/libduckdb_fastpforlib.a
+-    <INSTALL_DIR>/lib/libparquet_extension.a
+-    <INSTALL_DIR>/lib/libcore_functions_extension.a
+-    <INSTALL_DIR>/lib/libduckdb_generated_extension_loader.a
+-    <INSTALL_DIR>/lib/libjson_extension.a)
++  BUILD_BYPRODUCTS ${DUCKDB_BUILD_BYPRODUCTS})
+ 
+ ExternalProject_Get_Property(duckdb_ep install_dir)
+ ExternalProject_Get_Property(duckdb_ep binary_dir)
+@@ -107,6 +123,23 @@ add_library(duckdb_core_functions STATIC IMPORTED)
+ set_property(TARGET duckdb_core_functions PROPERTY IMPORTED_LOCATION ${install_dir}/lib/libcore_functions_extension.a)
+ target_include_directories(duckdb_core_functions INTERFACE ${DUCKDB_SOURCE_DIR}/extension/json/include)
+ 
++if(SUPERHUMAN_DOCS_EXTENSION_DIR)
++  add_library(duckdb_superhuman_docs STATIC IMPORTED)
++  set_property(
++    TARGET duckdb_superhuman_docs PROPERTY IMPORTED_LOCATION
++    ${install_dir}/lib/libsuperhuman_docs_extension.a)
++  target_include_directories(
++    duckdb_superhuman_docs
++    INTERFACE ${SUPERHUMAN_DOCS_EXTENSION_DIR}/src/include)
++
++  add_library(duckdb_superhuman_docs_rust STATIC IMPORTED)
++  set_property(
++    TARGET duckdb_superhuman_docs_rust PROPERTY IMPORTED_LOCATION
++    ${install_dir}/lib/libsuperhuman_docs_rust.a)
++  add_dependencies(duckdb_superhuman_docs duckdb_ep)
++  add_dependencies(duckdb_superhuman_docs_rust duckdb_ep)
++endif()
++
+ add_dependencies(duckdb duckdb_ep)
+ add_dependencies(duckdb_parquet duckdb_ep)
+ add_dependencies(duckdb_json duckdb_ep)
+diff --git a/lib/cmake/rapidjson.cmake b/lib/cmake/rapidjson.cmake
+index 73fad33..812bca6 100644
+--- a/lib/cmake/rapidjson.cmake
++++ b/lib/cmake/rapidjson.cmake
+@@ -17,6 +17,7 @@ ExternalProject_Add(
+     -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+     -DCMAKE_MODULE_PATH=${CMAKE_MODULE_PATH}
+     -DCMAKE_BUILD_TYPE=Release
++    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+     -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/third_party/rapidjson/install
+     -DRAPIDJSON_BUILD_DOC=FALSE
+     -DRAPIDJSON_BUILD_EXAMPLES=FALSE
+diff --git a/lib/include/duckdb/web/extensions/superhuman_docs_extension.h b/lib/include/duckdb/web/extensions/superhuman_docs_extension.h
+new file mode 100644
+index 0000000..39e87f0
+--- /dev/null
++++ b/lib/include/duckdb/web/extensions/superhuman_docs_extension.h
+@@ -0,0 +1,8 @@
++#ifndef INCLUDE_DUCKDB_WEB_EXTENSIONS_SUPERHUMAN_DOCS_EXTENSION_H_
++#define INCLUDE_DUCKDB_WEB_EXTENSIONS_SUPERHUMAN_DOCS_EXTENSION_H_
++
++#include "duckdb/main/database.hpp"
++
++extern "C" void duckdb_web_superhuman_docs_init(duckdb::DuckDB *db);
++
++#endif
+diff --git a/lib/src/extensions/superhuman_docs_extension.cc b/lib/src/extensions/superhuman_docs_extension.cc
+new file mode 100644
+index 0000000..7c6d1b7
+--- /dev/null
++++ b/lib/src/extensions/superhuman_docs_extension.cc
+@@ -0,0 +1,7 @@
++#include "duckdb/web/extensions/superhuman_docs_extension.h"
++
++#include "superhuman_docs_extension.hpp"
++
++extern "C" void duckdb_web_superhuman_docs_init(duckdb::DuckDB *db) {
++    db->LoadStaticExtension<duckdb::SuperhumanDocsExtension>();
++}
+diff --git a/lib/src/webdb.cc b/lib/src/webdb.cc
+index d683bc5..0ecc0d1 100644
+--- a/lib/src/webdb.cc
++++ b/lib/src/webdb.cc
+@@ -54,6 +54,9 @@
+ #include "duckdb/web/environment.h"
+ #include "duckdb/web/extensions/json_extension.h"
+ #include "duckdb/web/extensions/parquet_extension.h"
++#ifdef DUCKDB_SUPERHUMAN_DOCS_EXTENSION
++#include "duckdb/web/extensions/superhuman_docs_extension.h"
++#endif
+ #include "duckdb/web/functions/table_function_relation.h"
+ #include "duckdb/web/http_wasm.h"
+ #include "duckdb/web/io/arrow_ifstream.h"
+@@ -981,6 +984,9 @@ arrow::Status WebDB::Open(std::string_view args_json) {
+         auto db = make_shared_ptr<duckdb::DuckDB>(config_->path, &db_config);
+ #ifndef WASM_LOADABLE_EXTENSIONS
+         duckdb_web_parquet_init(db.get());
++#ifdef DUCKDB_SUPERHUMAN_DOCS_EXTENSION
++        duckdb_web_superhuman_docs_init(db.get());
++#endif
+ #if defined(DUCKDB_JSON_EXTENSION)
+         duckdb_web_json_init(db.get());
+ #endif
+diff --git a/packages/duckdb-wasm/bundle.mjs b/packages/duckdb-wasm/bundle.mjs
+index cb3b9ef..42807f7 100644
+--- a/packages/duckdb-wasm/bundle.mjs
++++ b/packages/duckdb-wasm/bundle.mjs
+@@ -36,7 +36,8 @@ import { execSync } from 'child_process';
+ // The lack of alternatives for Karma won't allow us to bundle workers and tests as ESM.
+ // We should upgrade all CommonJS bundles to ESM as soon as the dynamic requires are resolved.
+ 
+-const TARGET_BROWSER = ['chrome64', 'edge79', 'firefox62', 'safari11.1'];
++// Emscripten 4 emits BigInt-based i64 glue, which requires ES2020.
++const TARGET_BROWSER = ['es2020'];
+ const TARGET_BROWSER_TEST = ['es2020'];
+ const TARGET_NODE = ['node14.6'];
+ const EXTERNALS_NODE = ['apache-arrow'];
+@@ -104,7 +105,9 @@ fs.copyFile(path.resolve(src, 'bindings', 'duckdb-coi.wasm'), path.resolve(dist,
+     patchFile('./src/bindings/duckdb-mvp.js', 'child_process');
+     patchFile('./src/bindings/duckdb-eh.js', 'child_process');
+     patchFile('./src/bindings/duckdb-coi.js', 'child_process');
+-    patchFile('./src/bindings/duckdb-coi.pthread.js', 'vm');
++    patchFile('./src/bindings/duckdb-mvp.js', 'crypto');
++    patchFile('./src/bindings/duckdb-eh.js', 'crypto');
++    patchFile('./src/bindings/duckdb-coi.js', 'crypto');
+ 
+     // -------------------------------
+     // Browser bundles
+diff --git a/packages/duckdb-wasm/karma/karma.base.cjs b/packages/duckdb-wasm/karma/karma.base.cjs
+index f0c8a02..967656d 100644
+--- a/packages/duckdb-wasm/karma/karma.base.cjs
++++ b/packages/duckdb-wasm/karma/karma.base.cjs
+@@ -16,8 +16,10 @@ module.exports = function (config) {
+             'karma-coverage',
+             'karma-jasmine-html-reporter',
+             require('./s3rver/s3rver'),
++            { 'middleware:superhuman-docs-mock': require('./superhuman_docs_mock.cjs') },
+         ],
+         frameworks: ['jasmine', 's3rver'],
++        middleware: ['superhuman-docs-mock'],
+         s3rver: {
+             port: 4923,
+             silent: true,
+@@ -38,6 +40,10 @@ module.exports = function (config) {
+             '/static/': '/base/packages/duckdb-wasm/dist/',
+             '/data/': '/base/data/',
+         },
++        customHeaders: [
++            { match: '.*', name: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
++            { match: '.*', name: 'Cross-Origin-Embedder-Policy', value: 'require-corp' },
++        ],
+         exclude: [],
+         port: 9876,
+         colors: true,
+@@ -52,11 +58,7 @@ module.exports = function (config) {
+             },
+             ChromeHeadlessNoSandboxThreads: {
+                 base: 'ChromeHeadless',
+-                flags: [
+-                    '--disable-gpu',
+-                    '--no-sandbox',
+-                    '--js-flags="--experimental-wasm-threads"',
+-                ],
++                flags: ['--disable-gpu', '--no-sandbox', '--js-flags="--experimental-wasm-threads"'],
+             },
+         },
+         specReporter: {
+@@ -81,6 +83,8 @@ module.exports = function (config) {
+             },
+         },
+         client: {
++            useIframe: process.env.DUCKDB_WASM_TEST_BUNDLE !== 'coi',
++            args: [process.env.DUCKDB_WASM_TEST_BUNDLE || 'auto', process.env.DUCKDB_WASM_SUPERHUMAN_ONLY || '0'],
+             jasmine: {
+                 failFast: true,
+                 timeoutInterval: JS_TIMEOUT,
+diff --git a/packages/duckdb-wasm/karma/superhuman_docs_mock.cjs b/packages/duckdb-wasm/karma/superhuman_docs_mock.cjs
+new file mode 100644
+index 0000000..545244e
+--- /dev/null
++++ b/packages/duckdb-wasm/karma/superhuman_docs_mock.cjs
+@@ -0,0 +1,132 @@
++const requests = [];
++const occurrences = new Map();
++
++function json(res, status, body, cors = true) {
++    const payload = JSON.stringify(body);
++    const headers = {
++        'Content-Type': 'application/json',
++        'Content-Length': Buffer.byteLength(payload),
++    };
++    if (cors) {
++        headers['Access-Control-Allow-Origin'] = '*';
++        headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type';
++        headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
++    }
++    res.writeHead(status, headers);
++    res.end(payload);
++}
++
++function responseFor(method, pathname, search, body) {
++    const key = `${method} ${pathname}`;
++    const occurrence = (occurrences.get(key) || 0) + 1;
++    occurrences.set(key, occurrence);
++
++    if (method === 'GET' && pathname === '/whoami') return [200, { name: 'Browser Test' }];
++    if (method === 'GET' && pathname === '/docs/error-doc/tables') return [503, { message: 'mock failure' }];
++    if (method === 'GET' && pathname === '/docs/mock-doc/tables') {
++        return [200, { items: [{ id: 'tbl1', name: 'Tasks', tableType: 'table' }] }];
++    }
++    if (method === 'GET' && pathname === '/docs/mock-doc/tables/tbl1/columns') {
++        return [
++            200,
++            {
++                items: [
++                    { id: 'c_name', name: 'Name', calculated: false, format: { type: 'text', isArray: false } },
++                    { id: 'c_done', name: 'Done', calculated: false, format: { type: 'checkbox', isArray: false } },
++                    { id: 'c_amount', name: 'Amount', calculated: false, format: { type: 'number', isArray: false } },
++                ],
++            },
++        ];
++    }
++    if (method === 'GET' && pathname === '/docs/mock-doc/tables/tbl1/rows') {
++        if (search.has('syncToken')) return [200, { items: [] }];
++        if (search.has('pageToken')) {
++            return [
++                200,
++                {
++                    items: [{ id: 'r2', values: { c_name: 'Beta', c_done: false, c_amount: 2.5 } }],
++                    nextSyncToken: 'done',
++                },
++            ];
++        }
++        const query = search.get('query') || '';
++        if (query.includes('Alpha')) {
++            return [
++                200,
++                {
++                    items: [{ id: 'r1', values: { c_name: 'Alpha', c_done: true, c_amount: 1.25 } }],
++                    nextSyncToken: 'done',
++                },
++            ];
++        }
++        if (query.includes('Beta')) {
++            return [
++                200,
++                {
++                    items: [{ id: 'r2', values: { c_name: 'Beta', c_done: false, c_amount: 2.5 } }],
++                    nextSyncToken: 'done',
++                },
++            ];
++        }
++        return [
++            200,
++            {
++                items: [{ id: 'r1', values: { c_name: 'Alpha', c_done: true, c_amount: 1.25 } }],
++                nextPageToken: 'page-2',
++            },
++        ];
++    }
++    if (method === 'POST' && pathname === '/docs/mock-doc/tables/tbl1/rows') {
++        return [202, { requestId: 'insert-request', addedRowIds: ['new-row'] }];
++    }
++    if (method === 'PUT' && pathname === '/docs/mock-doc/tables/tbl1/rows/r1') {
++        return [202, { requestId: 'update-request', id: 'r1' }];
++    }
++    if (method === 'DELETE' && pathname === '/docs/mock-doc/tables/tbl1/rows') {
++        return [202, { requestId: 'delete-request', rowIds: ['r2'] }];
++    }
++    if (method === 'GET' && pathname.startsWith('/mutationStatus/')) {
++        if (occurrence === 1) return [200, { completed: false }];
++        return [200, { completed: true }];
++    }
++    if (method === 'GET' && pathname === '/slow/whoami') return [200, { name: body }];
++    return [404, { message: `unexpected mock request ${method} ${pathname}` }];
++}
++
++function factory() {
++    return function superhumanDocsMock(req, res, next) {
++        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
++        res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
++        if (!req.url.startsWith('/superhuman-docs-api')) return next();
++
++        const url = new URL(req.url, 'http://localhost');
++        const pathname = url.pathname.slice('/superhuman-docs-api'.length) || '/';
++        if (pathname === '/__requests') {
++            if (req.method === 'DELETE') {
++                requests.length = 0;
++                occurrences.clear();
++                return json(res, 200, { ok: true });
++            }
++            return json(res, 200, requests);
++        }
++        if (req.method === 'OPTIONS') return json(res, 204, {});
++
++        const chunks = [];
++        req.on('data', chunk => chunks.push(chunk));
++        req.on('end', () => {
++            const body = Buffer.concat(chunks).toString('utf8');
++            requests.push({ method: req.method, path: pathname, query: url.search.slice(1), body });
++            if (pathname.startsWith('/cors/')) {
++                return json(res, 200, { items: [] }, false);
++            }
++            if (pathname === '/slow/docs/slow-doc/tables') {
++                return setTimeout(() => json(res, 200, { items: [] }), 31000);
++            }
++            const [status, payload] = responseFor(req.method, pathname, url.searchParams, body);
++            json(res, status, payload);
++        });
++    };
++}
++
++factory.$inject = [];
++module.exports = ['factory', factory];
+diff --git a/packages/duckdb-wasm/src/bindings/bindings_base.ts b/packages/duckdb-wasm/src/bindings/bindings_base.ts
+index 81bf2a8..9dac278 100644
+--- a/packages/duckdb-wasm/src/bindings/bindings_base.ts
++++ b/packages/duckdb-wasm/src/bindings/bindings_base.ts
+@@ -5,7 +5,15 @@ import { InstantiationProgress } from './progress';
+ import { DuckDBBindings } from './bindings_interface';
+ import { DuckDBConnection } from './connection';
+ import { StatusCode, IsArrowBuffer, IsDuckDBWasmRetry } from '../status';
+-import { dropResponseBuffers, DuckDBRuntime, readString, callSRet, copyBuffer, DuckDBDataProtocol } from './runtime';
++import {
++    dropResponseBuffers,
++    DuckDBRuntime,
++    readString,
++    callSRet,
++    callSRetAsync,
++    copyBuffer,
++    DuckDBDataProtocol,
++} from './runtime';
+ import { CSVInsertOptions, JSONInsertOptions, ArrowInsertOptions } from './insert_options';
+ import { ScriptTokens } from './tokens';
+ import { FileStatistics } from './file_stats';
+@@ -170,6 +178,20 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+             }
+         }
+     }
++    /** Asyncify-safe disconnect for worker-facing APIs. */
++    public async disconnectAsync(conn: number): Promise<void> {
++        await Promise.resolve(
++            this.mod.ccall('duckdb_web_disconnect', null, ['number'], [conn], { async: true } as any),
++        );
++        if (this.pthread) {
++            for (const worker of [...this.pthread.runningWorkers, ...this.pthread.unusedWorkers]) {
++                worker.postMessage({
++                    cmd: 'dropUDFFunctions',
++                    connectionId: conn,
++                });
++            }
++        }
++    }
+ 
+     /** Send a query and return the full result */
+     public runQuery(conn: number, text: string): Uint8Array {
+@@ -191,6 +213,28 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return res;
+     }
++    /** Asyncify-safe query execution for worker-facing APIs. */
++    public async runQueryAsync(conn: number, text: string): Promise<Uint8Array> {
++        const buffer = TEXT_ENCODER.encode(text);
++        const bufferPtr = this.mod._malloc(buffer.length);
++        this.mod.HEAPU8.subarray(bufferPtr, bufferPtr + buffer.length).set(buffer);
++        try {
++            const [s, d, n] = await callSRetAsync(
++                this.mod,
++                'duckdb_web_query_run_buffer',
++                ['number', 'number', 'number'],
++                [conn, bufferPtr, buffer.length],
++            );
++            if (s !== StatusCode.SUCCESS) {
++                throw new Error(readString(this.mod, d, n));
++            }
++            const result = copyBuffer(this.mod, d, n);
++            dropResponseBuffers(this.mod);
++            return result;
++        } finally {
++            this.mod._free(bufferPtr);
++        }
++    }
+     /**
+      *  Start a pending query asynchronously.
+      *  This method returns either the arrow ipc schema or null.
+@@ -219,6 +263,36 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return res;
+     }
++    /** Asyncify-safe pending-query start for worker-facing APIs. */
++    public async startPendingQueryAsync(
++        conn: number,
++        text: string,
++        allowStreamResult: boolean = false,
++    ): Promise<Uint8Array | null> {
++        const buffer = TEXT_ENCODER.encode(text);
++        const bufferPtr = this.mod._malloc(buffer.length);
++        this.mod.HEAPU8.subarray(bufferPtr, bufferPtr + buffer.length).set(buffer);
++        try {
++            const [s, d, n] = await callSRetAsync(
++                this.mod,
++                'duckdb_web_pending_query_start_buffer',
++                ['number', 'number', 'number', 'boolean'],
++                [conn, bufferPtr, buffer.length, allowStreamResult],
++            );
++            if (s !== StatusCode.SUCCESS) {
++                throw new Error(readString(this.mod, d, n));
++            }
++            if (d == 0) {
++                dropResponseBuffers(this.mod);
++                return null;
++            }
++            const result = copyBuffer(this.mod, d, n);
++            dropResponseBuffers(this.mod);
++            return result;
++        } finally {
++            this.mod._free(bufferPtr);
++        }
++    }
+     /** Poll a pending query */
+     public pollPendingQuery(conn: number): Uint8Array | null {
+         const [s, d, n] = callSRet(this.mod, 'duckdb_web_pending_query_poll', ['number'], [conn]);
+@@ -232,6 +306,20 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return res;
+     }
++    /** Asyncify-safe pending-query poll for worker-facing APIs. */
++    public async pollPendingQueryAsync(conn: number): Promise<Uint8Array | null> {
++        const [s, d, n] = await callSRetAsync(this.mod, 'duckdb_web_pending_query_poll', ['number'], [conn]);
++        if (s !== StatusCode.SUCCESS) {
++            throw new Error(readString(this.mod, d, n));
++        }
++        if (d == 0) {
++            dropResponseBuffers(this.mod);
++            return null;
++        }
++        const result = copyBuffer(this.mod, d, n);
++        dropResponseBuffers(this.mod);
++        return result;
++    }
+     /** Cancel a pending query */
+     public cancelPendingQuery(conn: number): boolean {
+         return this.mod.ccall('duckdb_web_pending_query_cancel', 'boolean', ['number'], [conn]);
+@@ -260,6 +348,28 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return res;
+     }
++    /** Asyncify-safe result fetch for worker-facing APIs. */
++    public async fetchQueryResultsAsync(conn: number): Promise<Uint8Array | null> {
++        const [s, d, n] = await callSRetAsync(this.mod, 'duckdb_web_query_fetch_results', ['number'], [conn]);
++        if (IsDuckDBWasmRetry(s)) {
++            dropResponseBuffers(this.mod);
++            return null;
++        }
++        if (!IsArrowBuffer(s)) {
++            throw new Error(
++                'Unexpected StatusCode from duckdb_web_query_fetch_results (' +
++                    s +
++                    ') and with self reported error as' +
++                    readString(this.mod, d, n),
++            );
++        }
++        if (s !== StatusCode.SUCCESS) {
++            throw new Error(readString(this.mod, d, n));
++        }
++        const result = copyBuffer(this.mod, d, n);
++        dropResponseBuffers(this.mod);
++        return result;
++    }
+     /** Get table names */
+     public getTableNames(conn: number, text: string): string[] {
+         const BUF = TEXT_ENCODER.encode(text);
+@@ -280,6 +390,28 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return JSON.parse(res) as string[];
+     }
++    /** Asyncify-safe table-name extraction for worker-facing APIs. */
++    public async getTableNamesAsync(conn: number, text: string): Promise<string[]> {
++        const buffer = TEXT_ENCODER.encode(text);
++        const bufferPtr = this.mod._malloc(buffer.length);
++        this.mod.HEAPU8.subarray(bufferPtr, bufferPtr + buffer.length).set(buffer);
++        try {
++            const [s, d, n] = await callSRetAsync(
++                this.mod,
++                'duckdb_web_get_tablenames_buffer',
++                ['number', 'number', 'number'],
++                [conn, bufferPtr, buffer.length],
++            );
++            if (s !== StatusCode.SUCCESS) {
++                throw new Error(readString(this.mod, d, n));
++            }
++            const result = JSON.parse(readString(this.mod, d, n)) as string[];
++            dropResponseBuffers(this.mod);
++            return result;
++        } finally {
++            this.mod._free(bufferPtr);
++        }
++    }
+ 
+     /** Create a scalar function */
+     public createScalarFunction(
+@@ -344,6 +476,27 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return d;
+     }
++    /** Asyncify-safe prepare for worker-facing APIs. */
++    public async createPreparedAsync(conn: number, text: string): Promise<number> {
++        const buffer = TEXT_ENCODER.encode(text);
++        const bufferPtr = this.mod._malloc(buffer.length);
++        this.mod.HEAPU8.subarray(bufferPtr, bufferPtr + buffer.length).set(buffer);
++        try {
++            const [s, d, n] = await callSRetAsync(
++                this.mod,
++                'duckdb_web_prepared_create_buffer',
++                ['number', 'number', 'number'],
++                [conn, bufferPtr, buffer.length],
++            );
++            if (s !== StatusCode.SUCCESS) {
++                throw new Error(readString(this.mod, d, n));
++            }
++            dropResponseBuffers(this.mod);
++            return d;
++        } finally {
++            this.mod._free(bufferPtr);
++        }
++    }
+ 
+     /** Close a prepared statement */
+     public closePrepared(conn: number, statement: number): void {
+@@ -353,6 +506,19 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         }
+         dropResponseBuffers(this.mod);
+     }
++    /** Asyncify-safe prepared-statement close for worker-facing APIs. */
++    public async closePreparedAsync(conn: number, statement: number): Promise<void> {
++        const [s, d, n] = await callSRetAsync(
++            this.mod,
++            'duckdb_web_prepared_close',
++            ['number', 'number'],
++            [conn, statement],
++        );
++        if (s !== StatusCode.SUCCESS) {
++            throw new Error(readString(this.mod, d, n));
++        }
++        dropResponseBuffers(this.mod);
++    }
+ 
+     /** Execute a prepared statement and return the full result */
+     public runPrepared(conn: number, statement: number, params: any[]): Uint8Array {
+@@ -369,6 +535,21 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return res;
+     }
++    /** Asyncify-safe prepared execution for worker-facing APIs. */
++    public async runPreparedAsync(conn: number, statement: number, params: any[]): Promise<Uint8Array> {
++        const [s, d, n] = await callSRetAsync(
++            this.mod,
++            'duckdb_web_prepared_run',
++            ['number', 'number', 'string'],
++            [conn, statement, JSON.stringify(params)],
++        );
++        if (s !== StatusCode.SUCCESS) {
++            throw new Error(readString(this.mod, d, n));
++        }
++        const result = copyBuffer(this.mod, d, n);
++        dropResponseBuffers(this.mod);
++        return result;
++    }
+ 
+     /** Execute a prepared statement and stream the result */
+     public sendPrepared(conn: number, statement: number, params: any[]): Uint8Array {
+@@ -385,6 +566,21 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+         return res;
+     }
++    /** Asyncify-safe prepared streaming for worker-facing APIs. */
++    public async sendPreparedAsync(conn: number, statement: number, params: any[]): Promise<Uint8Array> {
++        const [s, d, n] = await callSRetAsync(
++            this.mod,
++            'duckdb_web_prepared_send',
++            ['number', 'number', 'string'],
++            [conn, statement, JSON.stringify(params)],
++        );
++        if (s !== StatusCode.SUCCESS) {
++            throw new Error(readString(this.mod, d, n));
++        }
++        const result = copyBuffer(this.mod, d, n);
++        dropResponseBuffers(this.mod);
++        return result;
++    }
+ 
+     /** Insert record batches from an arrow ipc stream */
+     public insertArrowFromIPCStream(conn: number, buffer: Uint8Array, options?: ArrowInsertOptions): void {
+@@ -625,11 +821,11 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+         dropResponseBuffers(this.mod);
+     }
+     /** Drop files */
+-    public dropFiles(names?:string[]): void {
+-        const pointers:number[] = [];
+-        let pointerOfArray:number = -1;
++    public dropFiles(names?: string[]): void {
++        const pointers: number[] = [];
++        let pointerOfArray: number = -1;
+         try {
+-            for (const str of (names ?? [])) {
++            for (const str of names ?? []) {
+                 if (str !== null && str !== undefined && str.length > 0) {
+                     const size = this.mod.lengthBytesUTF8(str) + 1;
+                     const ret = this.mod._malloc(size);
+@@ -650,14 +846,8 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+             const [s, d, n] = callSRet(
+                 this.mod,
+                 'duckdb_web_fs_drop_files',
+-                [
+-                    'number',
+-                    'number'
+-                ],
+-                [
+-                    pointerOfArray,
+-                    pointers.length
+-                ]
++                ['number', 'number'],
++                [pointerOfArray, pointers.length],
+             );
+             if (s !== StatusCode.SUCCESS) {
+                 throw new Error(readString(this.mod, d, n));
+@@ -667,7 +857,7 @@ export abstract class DuckDBBindingsBase implements DuckDBBindings {
+             for (const pointer of pointers) {
+                 this.mod._free(pointer);
+             }
+-            if( pointerOfArray > 0 ){
++            if (pointerOfArray > 0) {
+                 this.mod._free(pointerOfArray);
+             }
+         }
+diff --git a/packages/duckdb-wasm/src/bindings/bindings_browser_coi.ts b/packages/duckdb-wasm/src/bindings/bindings_browser_coi.ts
+index 1db4e5a..9794ccf 100644
+--- a/packages/duckdb-wasm/src/bindings/bindings_browser_coi.ts
++++ b/packages/duckdb-wasm/src/bindings/bindings_browser_coi.ts
+@@ -22,6 +22,7 @@ export class DuckDB extends DuckDBBrowserBindings {
+             ...moduleOverrides,
+             instantiateWasm: this.instantiateWasm.bind(this),
+             locateFile: this.locateFile.bind(this),
++            mainScriptUrlOrBlob: this.pthreadWorkerURL || undefined,
+         });
+     }
+ }
+diff --git a/packages/duckdb-wasm/src/bindings/bindings_interface.ts b/packages/duckdb-wasm/src/bindings/bindings_interface.ts
+index 06e712f..11cde5a 100644
+--- a/packages/duckdb-wasm/src/bindings/bindings_interface.ts
++++ b/packages/duckdb-wasm/src/bindings/bindings_interface.ts
+@@ -15,17 +15,27 @@ export interface DuckDBBindings {
+ 
+     connect(): DuckDBConnection;
+     disconnect(conn: number): void;
++    disconnectAsync(conn: number): Promise<void>;
+     runQuery(conn: number, text: string): Uint8Array;
++    runQueryAsync(conn: number, text: string): Promise<Uint8Array>;
+     startPendingQuery(conn: number, text: string, allowStreamResult: boolean): Uint8Array | null;
++    startPendingQueryAsync(conn: number, text: string, allowStreamResult: boolean): Promise<Uint8Array | null>;
+     pollPendingQuery(conn: number): Uint8Array | null;
++    pollPendingQueryAsync(conn: number): Promise<Uint8Array | null>;
+     cancelPendingQuery(conn: number): boolean;
+     fetchQueryResults(conn: number): Uint8Array | null;
++    fetchQueryResultsAsync(conn: number): Promise<Uint8Array | null>;
+     getTableNames(conn: number, text: string): string[];
++    getTableNamesAsync(conn: number, text: string): Promise<string[]>;
+ 
+     createPrepared(conn: number, text: string): number;
++    createPreparedAsync(conn: number, text: string): Promise<number>;
+     closePrepared(conn: number, statement: number): void;
++    closePreparedAsync(conn: number, statement: number): Promise<void>;
+     runPrepared(conn: number, statement: number, params: any[]): Uint8Array;
++    runPreparedAsync(conn: number, statement: number, params: any[]): Promise<Uint8Array>;
+     sendPrepared(conn: number, statement: number, params: any[]): Uint8Array;
++    sendPreparedAsync(conn: number, statement: number, params: any[]): Promise<Uint8Array>;
+ 
+     createScalarFunction(conn: number, name: string, returns: arrow.DataType, func: (...args: any[]) => void): void;
+ 
+diff --git a/packages/duckdb-wasm/src/bindings/duckdb_module.ts b/packages/duckdb-wasm/src/bindings/duckdb_module.ts
+index aafbfb6..7efa1e1 100644
+--- a/packages/duckdb-wasm/src/bindings/duckdb_module.ts
++++ b/packages/duckdb-wasm/src/bindings/duckdb_module.ts
+@@ -4,6 +4,7 @@ export interface PThread {
+ }
+ 
+ export interface DuckDBModule extends EmscriptenModule {
++    mainScriptUrlOrBlob?: string | Blob;
+     stackSave: typeof stackSave;
+     stackAlloc: typeof stackAlloc;
+     stackRestore: typeof stackRestore;
+diff --git a/packages/duckdb-wasm/src/bindings/runtime.ts b/packages/duckdb-wasm/src/bindings/runtime.ts
+index e73e71d..6158edf 100644
+--- a/packages/duckdb-wasm/src/bindings/runtime.ts
++++ b/packages/duckdb-wasm/src/bindings/runtime.ts
+@@ -62,7 +62,7 @@ export enum FileFlags {
+     FILE_FLAGS_NULL_IF_NOT_EXISTS = 1 << 7,
+     FILE_FLAGS_PARALLEL_ACCESS = 1 << 8,
+     FILE_FLAGS_EXCLUSIVE_CREATE = 1 << 9,
+-    FILE_FLAGS_NULL_IF_EXISTS = 1 << 10
++    FILE_FLAGS_NULL_IF_EXISTS = 1 << 10,
+ }
+ 
+ /** Configuration for the AWS S3 Filesystem */
+@@ -129,6 +129,26 @@ export function callSRet(
+     return [status, data, dataSize];
+ }
+ 
++/** Call an Asyncify-instrumented function with a packed response buffer. */
++export async function callSRetAsync(
++    mod: DuckDBModule,
++    funcName: string,
++    argTypes: Array<Emscripten.JSType>,
++    args: Array<any>,
++): Promise<[number, number, number]> {
++    const stackPointer = mod.stackSave();
++    const response = mod.stackAlloc(3 * 8);
++    argTypes.unshift('number');
++    args.unshift(response);
++
++    try {
++        await Promise.resolve(mod.ccall(funcName, null, argTypes, args, { async: true } as any));
++        return [mod.HEAPF64[(response >> 3) + 0], mod.HEAPF64[(response >> 3) + 1], mod.HEAPF64[(response >> 3) + 2]];
++    } finally {
++        mod.stackRestore(stackPointer);
++    }
++}
++
+ /** Drop response buffers */
+ export function dropResponseBuffers(mod: DuckDBModule): void {
+     mod.ccall('duckdb_web_clear_response', null, [], []);
+diff --git a/packages/duckdb-wasm/src/parallel/worker_dispatcher.ts b/packages/duckdb-wasm/src/parallel/worker_dispatcher.ts
+index a030999..0ad175a 100644
+--- a/packages/duckdb-wasm/src/parallel/worker_dispatcher.ts
++++ b/packages/duckdb-wasm/src/parallel/worker_dispatcher.ts
+@@ -8,6 +8,8 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+     protected _bindings: DuckDBBindings | null = null;
+     /** The next message id */
+     protected _nextMessageId = 0;
++    /** Asyncify supports only one in-flight compiled call per module. */
++    private _commandQueue: Promise<void> = Promise.resolve();
+ 
+     /** Instantiate the wasm module */
+     protected abstract instantiate(
+@@ -65,8 +67,15 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+         return;
+     }
+ 
+-    /** Process a request from the main thread */
+-    public async onMessage(request: WorkerRequestVariant): Promise<void> {
++    /** Process requests serially so an Asyncify suspension cannot be re-entered. */
++    public onMessage(request: WorkerRequestVariant): Promise<void> {
++        const next = this._commandQueue.then(() => this.dispatchMessage(request));
++        this._commandQueue = next.catch(() => undefined);
++        return next;
++    }
++
++    /** Process one request from the main thread. */
++    private async dispatchMessage(request: WorkerRequestVariant): Promise<void> {
+         // First process those requests that don't need bindings
+         switch (request.type) {
+             case WorkerRequestType.PING:
+@@ -170,11 +179,13 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.DISCONNECT:
+-                    this._bindings.disconnect(request.data);
++                    await Promise.resolve(this._bindings.disconnectAsync(request.data));
+                     this.sendOK(request);
+                     break;
+                 case WorkerRequestType.CREATE_PREPARED: {
+-                    const result = this._bindings.createPrepared(request.data[0], request.data[1]);
++                    const result = await Promise.resolve(
++                        this._bindings.createPreparedAsync(request.data[0], request.data[1]),
++                    );
+                     this.postMessage(
+                         {
+                             messageId: this._nextMessageId++,
+@@ -187,12 +198,14 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.CLOSE_PREPARED: {
+-                    this._bindings.closePrepared(request.data[0], request.data[1]);
++                    await Promise.resolve(this._bindings.closePreparedAsync(request.data[0], request.data[1]));
+                     this.sendOK(request);
+                     break;
+                 }
+                 case WorkerRequestType.RUN_PREPARED: {
+-                    const result = this._bindings.runPrepared(request.data[0], request.data[1], request.data[2]);
++                    const result = await Promise.resolve(
++                        this._bindings.runPreparedAsync(request.data[0], request.data[1], request.data[2]),
++                    );
+                     this.postMessage(
+                         {
+                             messageId: this._nextMessageId++,
+@@ -205,7 +218,9 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.RUN_QUERY: {
+-                    const result = this._bindings.runQuery(request.data[0], request.data[1]);
++                    const result = await Promise.resolve(
++                        this._bindings.runQueryAsync(request.data[0], request.data[1]),
++                    );
+                     this.postMessage(
+                         {
+                             messageId: this._nextMessageId++,
+@@ -218,7 +233,9 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.SEND_PREPARED: {
+-                    const result = this._bindings.sendPrepared(request.data[0], request.data[1], request.data[2]);
++                    const result = await Promise.resolve(
++                        this._bindings.sendPreparedAsync(request.data[0], request.data[1], request.data[2]),
++                    );
+                     this.postMessage(
+                         {
+                             messageId: this._nextMessageId++,
+@@ -231,7 +248,9 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.START_PENDING_QUERY: {
+-                    const result = this._bindings.startPendingQuery(request.data[0], request.data[1], request.data[2]);
++                    const result = await Promise.resolve(
++                        this._bindings.startPendingQueryAsync(request.data[0], request.data[1], request.data[2]),
++                    );
+                     const transfer = [];
+                     if (result) {
+                         transfer.push(result.buffer);
+@@ -248,7 +267,7 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.POLL_PENDING_QUERY: {
+-                    const result = this._bindings.pollPendingQuery(request.data);
++                    const result = await Promise.resolve(this._bindings.pollPendingQueryAsync(request.data));
+                     const transfer = [];
+                     if (result) {
+                         transfer.push(result.buffer);
+@@ -265,7 +284,7 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.CANCEL_PENDING_QUERY: {
+-                    const result = this._bindings.cancelPendingQuery(request.data);
++                    const result = await Promise.resolve(this._bindings.cancelPendingQuery(request.data));
+                     this.postMessage(
+                         {
+                             messageId: this._nextMessageId++,
+@@ -278,7 +297,7 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.FETCH_QUERY_RESULTS: {
+-                    const result = this._bindings.fetchQueryResults(request.data);
++                    const result = await Promise.resolve(this._bindings.fetchQueryResultsAsync(request.data));
+                     const transfer = result ? [result.buffer] : [];
+                     this.postMessage(
+                         {
+@@ -292,7 +311,9 @@ export abstract class AsyncDuckDBDispatcher implements Logger {
+                     break;
+                 }
+                 case WorkerRequestType.GET_TABLE_NAMES: {
+-                    const result = this._bindings.getTableNames(request.data[0], request.data[1]);
++                    const result = await Promise.resolve(
++                        this._bindings.getTableNamesAsync(request.data[0], request.data[1]),
++                    );
+                     this.postMessage(
+                         {
+                             messageId: this._nextMessageId++,
+diff --git a/packages/duckdb-wasm/src/targets/duckdb-browser-coi.pthread.worker.ts b/packages/duckdb-wasm/src/targets/duckdb-browser-coi.pthread.worker.ts
+index 2be2de2..40a8b54 100644
+--- a/packages/duckdb-wasm/src/targets/duckdb-browser-coi.pthread.worker.ts
++++ b/packages/duckdb-wasm/src/targets/duckdb-browser-coi.pthread.worker.ts
+@@ -1,4 +1,3 @@
+-import * as pthread_api from '../bindings/duckdb-coi.pthread';
+ import DuckDB from '../bindings/duckdb-coi';
+ import { BROWSER_RUNTIME } from '../bindings/runtime_browser';
+ 
+@@ -9,23 +8,14 @@ for (const func of Object.getOwnPropertyNames(BROWSER_RUNTIME)) {
+     globalThis.DUCKDB_RUNTIME[func] = Object.getOwnPropertyDescriptor(BROWSER_RUNTIME, func)!.value;
+ }
+ 
+-// We just override the load handler of the pthread wrapper to bundle DuckDB with esbuild.
+-globalThis.onmessage = (e: any) => {
+-    if (e.data.cmd === 'load') {
+-        let m = pthread_api.getModule();
++// Emscripten 4 uses the main module as its pthread worker. Its generated module
++// detects the `em-pthread-*` worker name and installs this handler on import.
++if (!DuckDB) throw new Error('DuckDB pthread module did not load');
++const pthreadOnMessage = globalThis.onmessage!;
+ 
+-        (globalThis as any).startWorker = (instance: any) => {
+-            m = instance;
+-            postMessage({ cmd: 'loaded' });
+-        };
+-        m['wasmModule'] = e.data.wasmModule;
+-        m['wasmMemory'] = e.data.wasmMemory;
+-        m['buffer'] = m['wasmMemory'].buffer;
+-        m['ENVIRONMENT_IS_PTHREAD'] = true;
+-        DuckDB(m).then((instance: any) => {
+-            pthread_api.setModule(instance);
+-        });
+-    } else if (e.data.cmd === 'registerFileHandle') {
++// Preserve DuckDB-Wasm's file/UDF messages around Emscripten's pthread handler.
++globalThis.onmessage = (e: any) => {
++    if (e.data.cmd === 'registerFileHandle') {
+         globalThis.DUCKDB_RUNTIME._files = globalThis.DUCKDB_RUNTIME._files || new Map();
+         globalThis.DUCKDB_RUNTIME._files.set(e.data.fileName, e.data.fileHandle);
+     } else if (e.data.cmd === 'dropFileHandle') {
+@@ -42,6 +32,6 @@ globalThis.onmessage = (e: any) => {
+             }
+         }
+     } else {
+-        pthread_api.onmessage(e);
++        (pthreadOnMessage as any)(e);
+     }
+ };
+diff --git a/packages/duckdb-wasm/test/index_browser.ts b/packages/duckdb-wasm/test/index_browser.ts
+index b395925..0e7e84e 100644
+--- a/packages/duckdb-wasm/test/index_browser.ts
++++ b/packages/duckdb-wasm/test/index_browser.ts
+@@ -3,7 +3,7 @@ import * as duckdb from '../src/targets/duckdb';
+ import * as check from 'wasm-feature-detect';
+ 
+ // Configure the worker
+-const DUCKDB_BUNDLES: duckdb.DuckDBBundles = {
++const ALL_DUCKDB_BUNDLES: duckdb.DuckDBBundles = {
+     mvp: {
+         mainModule: new URL('/static/duckdb-mvp.wasm', window.location.href).href,
+         mainWorker: new URL('/static/duckdb-browser-mvp.worker.js', window.location.href).href,
+@@ -18,10 +18,24 @@ const DUCKDB_BUNDLES: duckdb.DuckDBBundles = {
+         pthreadWorker: new URL('/static/duckdb-browser-coi.pthread.worker.js', window.location.href).href,
+     },
+ };
++const TEST_BUNDLE = ((window as any).__karma__?.config?.args?.[0] || 'auto') as string;
++const SUPERHUMAN_ONLY = (window as any).__karma__?.config?.args?.[1] === '1';
++const DUCKDB_BUNDLES: duckdb.DuckDBBundles =
++    TEST_BUNDLE === 'mvp'
++        ? { mvp: ALL_DUCKDB_BUNDLES.mvp }
++        : TEST_BUNDLE === 'eh'
++          ? { mvp: ALL_DUCKDB_BUNDLES.mvp, eh: ALL_DUCKDB_BUNDLES.eh }
++          : TEST_BUNDLE === 'coi'
++            ? ALL_DUCKDB_BUNDLES
++            : ALL_DUCKDB_BUNDLES;
+ let DUCKDB_BUNDLE: duckdb.DuckDBBundle | null = null;
+ 
+ describe('wasm check', () => {
+     it('worker and wasm urls', async () => {
++        if (TEST_BUNDLE !== 'auto') {
++            expect(DUCKDB_BUNDLE!.mainModule).toContain(`duckdb-${TEST_BUNDLE}.wasm`);
++            return;
++        }
+         if (
+             (await duckdb.getPlatformFeatures()).crossOriginIsolated &&
+             (await check.exceptions()) &&
+@@ -81,8 +95,10 @@ let worker: Worker | null = null;
+ 
+ beforeAll(async () => {
+     const logger = new duckdb_blocking.VoidLogger();
+-    db = await duckdb_blocking.createDuckDB(DUCKDB_BUNDLES, logger, duckdb_blocking.BROWSER_RUNTIME);
+-    await db.instantiate(_ => {});
++    if (!SUPERHUMAN_ONLY) {
++        db = await duckdb_blocking.createDuckDB(DUCKDB_BUNDLES, logger, duckdb_blocking.BROWSER_RUNTIME);
++        await db.instantiate(_ => {});
++    }
+ 
+     DUCKDB_BUNDLE = await duckdb.selectBundle(DUCKDB_BUNDLES);
+     worker = await duckdb.createWorker(DUCKDB_BUNDLE!.mainWorker!);
+@@ -109,6 +125,7 @@ import { testTableNames, testTableNamesAsync } from './tablenames.test';
+ import { testRegressionAsync } from './regression';
+ import { testUDF } from './udf.test';
+ import { longQueries } from './long_queries.test';
++import { testSuperhumanDocs } from './superhuman_docs.test';
+ //import { testEXCEL } from './excel.test';
+ //import { testJSON } from './json.test';
+ import { testPivot } from './pivot.test';
+@@ -116,29 +133,32 @@ import { testPivot } from './pivot.test';
+ const baseURL = window.location.origin;
+ const dataURL = `${baseURL}/data`;
+ 
+-testHTTPFS(() => db!);
+-testHTTPFSAsync(() => adb!, resolveData, dataURL);
+-testUDF(() => db!);
+-longQueries(() => adb!);
+-testTableNames(() => db!);
+-testTableNamesAsync(() => adb!);
+-testRegressionAsync(() => adb!);
+-testAllTypes(() => db!);
+-testAllTypesAsync(() => adb!);
+-testBindings(() => db!, dataURL);
+-testAsyncBindings(() => adb!, dataURL, duckdb.DuckDBDataProtocol.HTTP);
+-testBatchStream(() => db!);
+-testAsyncBatchStream(() => adb!);
+-testFilesystem(() => adb!, resolveData, dataURL, duckdb.DuckDBDataProtocol.HTTP);
+-testOPFS(dataURL, () => DUCKDB_BUNDLE!);
+-testArrowInsert(() => db!);
+-testArrowInsertAsync(() => adb!);
+-testJSONInsert(() => db!);
+-testJSONInsertAsync(() => adb!);
+-testCSVInsert(() => db!);
+-testCSVInsertAsync(() => adb!);
+-testTokenization(() => db!);
+-testTokenizationAsync(() => adb!);
+-//testEXCEL(() => db!);
+-//testJSON(() => db!);
+-testPivot(() => db!);
++testSuperhumanDocs(() => adb!);
++if (!SUPERHUMAN_ONLY) {
++    testHTTPFS(() => db!);
++    testHTTPFSAsync(() => adb!, resolveData, dataURL);
++    testUDF(() => db!);
++    longQueries(() => adb!);
++    testTableNames(() => db!);
++    testTableNamesAsync(() => adb!);
++    testRegressionAsync(() => adb!);
++    testAllTypes(() => db!);
++    testAllTypesAsync(() => adb!);
++    testBindings(() => db!, dataURL);
++    testAsyncBindings(() => adb!, dataURL, duckdb.DuckDBDataProtocol.HTTP);
++    testBatchStream(() => db!);
++    testAsyncBatchStream(() => adb!);
++    testFilesystem(() => adb!, resolveData, dataURL, duckdb.DuckDBDataProtocol.HTTP);
++    testOPFS(dataURL, () => DUCKDB_BUNDLE!);
++    testArrowInsert(() => db!);
++    testArrowInsertAsync(() => adb!);
++    testJSONInsert(() => db!);
++    testJSONInsertAsync(() => adb!);
++    testCSVInsert(() => db!);
++    testCSVInsertAsync(() => adb!);
++    testTokenization(() => db!);
++    testTokenizationAsync(() => adb!);
++    //testEXCEL(() => db!);
++    //testJSON(() => db!);
++    testPivot(() => db!);
++}
+diff --git a/packages/duckdb-wasm/test/superhuman_docs.test.ts b/packages/duckdb-wasm/test/superhuman_docs.test.ts
+new file mode 100644
+index 0000000..a66f461
+--- /dev/null
++++ b/packages/duckdb-wasm/test/superhuman_docs.test.ts
+@@ -0,0 +1,91 @@
++import * as duckdb from '../src/targets/duckdb';
++
++type RecordedRequest = { method: string; path: string; query: string; body: string };
++
++const sqlString = (value: string): string => `'${value.replace(/'/g, "''")}'`;
++
++export function testSuperhumanDocs(adb: () => duckdb.AsyncDuckDB): void {
++    describe('Superhuman Docs built-in extension', () => {
++        const apiBase = `${window.location.origin}/superhuman-docs-api`;
++
++        beforeEach(async () => {
++            await fetch(`${apiBase}/__requests`, { method: 'DELETE' });
++            await adb().open({ path: ':memory:' });
++        });
++
++        it('attaches, scans pagination, polls mutations, and preserves DELETE JSON', async () => {
++            const conn = await adb().connect();
++            await conn.query(
++                `ATTACH 'mock-doc' AS superhuman_docs_doc (` +
++                    `TYPE superhuman_docs, TOKEN 'mock-token', API_BASE ${sqlString(apiBase)}, ` +
++                    `WAIT_FOR_MUTATIONS true, MUTATION_TIMEOUT_SECONDS 5);`,
++            );
++            const rows = await conn.query(`SELECT "Name" FROM superhuman_docs_doc.main."Tasks" ORDER BY "Name"`);
++            expect(rows.toArray().map(row => row.Name)).toEqual(['Alpha', 'Beta']);
++            await conn.query(
++                `INSERT INTO superhuman_docs_doc.main."Tasks" ("Name", "Done", "Amount") ` +
++                    `VALUES ('Gamma', false, 3.5)`,
++            );
++            await conn.query(
++                `UPDATE superhuman_docs_doc.main."Tasks" SET "Done" = false, "Amount" = 4.5 ` +
++                    `WHERE "Name" = 'Alpha'`,
++            );
++            await conn.query(`DELETE FROM superhuman_docs_doc.main."Tasks" WHERE "Name" = 'Beta'`);
++
++            const requests = (await (await fetch(`${apiBase}/__requests`)).json()) as RecordedRequest[];
++            expect(requests.some(req => req.method === 'GET' && req.query.includes('pageToken=page-2'))).toBeTrue();
++            expect(requests.some(req => req.path === '/mutationStatus/delete-request')).toBeTrue();
++            const deletion = requests.find(
++                req => req.method === 'DELETE' && req.path === '/docs/mock-doc/tables/tbl1/rows',
++            );
++            expect(deletion).toBeDefined();
++            expect(JSON.parse(deletion!.body).rowIds).toEqual(['r2']);
++
++            await conn.close();
++        });
++
++        it('surfaces HTTP and network/CORS errors and remains usable', async () => {
++            const conn = await adb().connect();
++            await expectAsync(
++                conn.query(
++                    `ATTACH 'error-doc' AS broken (` +
++                        `TYPE superhuman_docs, TOKEN 'mock-token', API_BASE ${sqlString(apiBase)});`,
++                ),
++            ).toBeRejectedWithError(/503|mock failure/);
++            await expectAsync(
++                conn.query(
++                    `ATTACH 'mock-doc' AS unreachable (` +
++                        `TYPE superhuman_docs, TOKEN 'mock-token', API_BASE 'http://127.0.0.1:1');`,
++                ),
++            ).toBeRejected();
++            const corsBase = `http://127.0.0.1:${window.location.port}/superhuman-docs-api/cors`;
++            await expectAsync(
++                conn.query(
++                    `ATTACH 'mock-doc' AS cors_rejected (` +
++                        `TYPE superhuman_docs, TOKEN 'mock-token', API_BASE ${sqlString(corsBase)});`,
++                ),
++            ).toBeRejected();
++            const result = await conn.query('SELECT 42 AS answer');
++            expect(result.toArray()[0].answer).toEqual(42);
++            await conn.close();
++        });
++
++        it('enforces the 30-second transport timeout and remains usable', async () => {
++            const conn = await adb().connect();
++            const started = performance.now();
++            await expectAsync(
++                conn.query(
++                    `ATTACH 'slow-doc' AS timed_out (` +
++                        `TYPE superhuman_docs, TOKEN 'mock-token', ` +
++                        `API_BASE ${sqlString(`${apiBase}/slow`)});`,
++                ),
++            ).toBeRejected();
++            const elapsed = performance.now() - started;
++            expect(elapsed).toBeGreaterThanOrEqual(29000);
++            expect(elapsed).toBeLessThan(35000);
++            const result = await conn.query('SELECT 42 AS answer');
++            expect(result.toArray()[0].answer).toEqual(42);
++            await conn.close();
++        });
++    });
++}
+diff --git a/scripts/wasm_build_lib.sh b/scripts/wasm_build_lib.sh
+index f697bad..fa34f1b 100755
+--- a/scripts/wasm_build_lib.sh
++++ b/scripts/wasm_build_lib.sh
+@@ -15,11 +15,15 @@ echo "${DUCKDB_LOCATION}"
+ CPP_SOURCE_DIR="${PROJECT_ROOT}/lib"
+ DUCKDB_LIB_DIR="${PROJECT_ROOT}/packages/duckdb-wasm/src/bindings"
+ 
+-CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || sysctl -n hw.ncpu)
++CORES=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)
+ 
+ ADDITIONAL_FLAGS=
+ SUFFIX=
+ LINK_FLAGS=
++EXTENSION_FLAGS=
++if [ -n "${SUPERHUMAN_DOCS_EXTENSION_DIR:-}" ]; then
++  EXTENSION_FLAGS="-DSUPERHUMAN_DOCS_EXTENSION_DIR=${SUPERHUMAN_DOCS_EXTENSION_DIR}"
++fi
+ case $MODE in
+   "debug") ADDITIONAL_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DWASM_FAST_LINKING=1" ;;
+   "dev") ADDITIONAL_FLAGS="-DCMAKE_BUILD_TYPE=RelWithDebInfo -DWASM_FAST_LINKING=1" ;;
+@@ -57,11 +61,10 @@ emcmake cmake \
+     -S${CPP_SOURCE_DIR} \
+     -B${BUILD_DIR} \
+     -DDUCKDB_WASM_VERSION=${DUCKDB_WASM_VERSION_NAME} \
+-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+     -DDUCKDB_LOCATION=${DUCKDB_LOCATION} \
+     -DWASM_LINK_FLAGS_EXT="${LINK_FLAGS}" \
+     -DDUCKDB_EXTENSION_CONFIGS=extension_config_wasm.cmake \
++    ${EXTENSION_FLAGS} \
+     ${ADDITIONAL_FLAGS}
+ 
+ emmake make \
+@@ -76,11 +79,10 @@ emcmake cmake \
+     -S${CPP_SOURCE_DIR} \
+     -B${BUILD_DIR} \
+     -DDUCKDB_WASM_VERSION=${DUCKDB_WASM_VERSION_NAME} \
+-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+     -DDUCKDB_LOCATION=${DUCKDB_LOCATION} \
+     -DWASM_LINK_FLAGS_EXT="${LINK_FLAGS}" \
+     -DDUCKDB_EXTENSION_CONFIGS=extension_config_wasm.cmake \
++    ${EXTENSION_FLAGS} \
+     -DUSE_GENERATED_EXPORTED_LIST=1 \
+     ${ADDITIONAL_FLAGS}
+ 
+@@ -90,28 +92,7 @@ emmake make \
+     duckdb_wasm
+ fi
+ 
+-js-beautify -v || npm install -g js-beautify
+-js-beautify ${BUILD_DIR}/duckdb_wasm.js > ${BUILD_DIR}/beauty.js
+-sed 's/case \"__table_base\"/case \"getTempRet0\": return getTempRet0;   case \"__table_base\"/g' ${BUILD_DIR}/beauty.js > ${BUILD_DIR}/beauty_sed.js
+-cp ${BUILD_DIR}/beauty_sed.js ${BUILD_DIR}/beauty.js
+-cp ${BUILD_DIR}/beauty.js ${BUILD_DIR}/duckdb_wasm.js
+-awk '{gsub(/get\(stubs, prop\) \{/,"get(stubs,prop) { if (prop.startsWith(\"invoke_\")) {return createDyncallWrapper(prop.substring(7));}"); print}' ${BUILD_DIR}/beauty.js > ${BUILD_DIR}/beauty2.js
+-awk '!(/var .*wasmExports\[/ || /var [_a-z0-9A-Z]+ = Module\[\"[_a-z0-9A-Z]+\"\] = [0-9]+;/) || /var _duckdb_web/ || /var _main/ || /var _calloc/ || /var _malloc/ || /var _free/ || /var stack/ || /var ___dl_seterr/ || /var __em/ || /var _em/ || /var _pthread/' ${BUILD_DIR}/beauty2.js > ${BUILD_DIR}/duckdb_wasm.js
+-
+ cp ${BUILD_DIR}/duckdb_wasm.wasm ${DUCKDB_LIB_DIR}/duckdb${SUFFIX}.wasm
+ sed \
+   -e "s/duckdb_wasm\.wasm/.\/duckdb${SUFFIX}.wasm/g" \
+   ${BUILD_DIR}/duckdb_wasm.js > ${DUCKDB_LIB_DIR}/duckdb${SUFFIX}.js
+-
+-if [ -f ${BUILD_DIR}/duckdb_wasm.worker.js ]; then
+-  sed \
+-    -e "s/duckdb_wasm\.wasm/.\/duckdb${SUFFIX}.wasm/g" \
+-    -e "s/duckdb_wasm\.js/.\/duckdb${SUFFIX}.js/g" \
+-    ${BUILD_DIR}/duckdb_wasm.worker.js > ${DUCKDB_LIB_DIR}/duckdb${SUFFIX}.pthread.js
+-
+-  # Expose the module.
+-  # This will allow us to reuse the generated pthread handler and only overwrite the loading.
+-  # More info: duckdb-browser-async-coi.pthread.worker.ts
+-  printf "\nexport const onmessage = self.onmessage;\nexport function getModule() { return Module; }\nexport function setModule(m) { Module = m; }\n" \
+-    >> ${DUCKDB_LIB_DIR}/duckdb${SUFFIX}.pthread.js
+-fi
