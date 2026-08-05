@@ -14,7 +14,7 @@ panic = "abort"
 
 [dependencies]
 serde_json = { version = "1", features = ["arbitrary_precision"] }
-superhuman-docs-async = { git = "https://github.com/its-felix/superhuman-docs-sdk.git", tag = "v0.5.0" }
+superhuman-docs-async = { git = "https://github.com/its-felix/superhuman-docs-sdk.git", tag = "v0.5.1" }
 tokio = { version = "1", features = ["sync"] }
 
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]

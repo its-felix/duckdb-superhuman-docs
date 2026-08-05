@@ -1,6 +1,11 @@
 use super::*;
 
 #[test]
+fn sdk_uses_the_superhuman_docs_api_by_default() {
+    assert_eq!(DEFAULT_BASE_URL, "https://docs.superhuman.com/apis/v1");
+}
+
+#[test]
 fn token_validation_uses_whoami_status() {
     let _network_guard = NETWORK_UNIT_TEST_LOCK.lock().unwrap();
     let server = MockSuperhumanDocsServer::start();

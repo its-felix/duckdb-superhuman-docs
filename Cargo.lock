@@ -1004,8 +1004,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "superhuman-docs-async"
-version = "0.5.0"
-source = "git+https://github.com/its-felix/superhuman-docs-sdk.git?tag=v0.5.0#cf50458babc6608527fa5d6de6de1dd8bec1e198"
+version = "0.5.1"
+source = "git+https://github.com/its-felix/superhuman-docs-sdk.git?tag=v0.5.1#8261d9ac6767e45fdeb058c6b96fdfa0bf64fe68"
 dependencies = [
  "serde",
  "serde_json",
